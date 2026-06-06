@@ -13,12 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ensure user-defined pretraining & rl configs inherit from base configs."""
+"""Ensure user-defined pretraining configs inherit from the base config."""
 
 from ml_collections import ConfigDict
 
 from .pretrain import get_config as get_pretrain_config
-from .rl import get_config as get_rl_config
 
 
 # Ref: https://github.com/deepmind/jaxline/blob/master/jaxline/base_config.py
@@ -43,12 +42,12 @@ def validate_config(config, mode):
 
   Args:
     config: The child config to validate.
-    mode: Can be one of 'pretraining' or 'rl'.
+    mode: Must be 'pretrain'.
 
   Raises:
     ValueError: if the base config contains keys that are not present in config.
   """
-  assert mode in ["pretrain", "rl"]
-  base_config = get_rl_config() if mode == "rl" else get_pretrain_config()
-  base_filename = "rl.py" if mode == "rl" else "pretrain.py"
+  assert mode == "pretrain"
+  base_config = get_pretrain_config()
+  base_filename = "pretrain.py"
   __validate_keys(base_config, config, base_filename)

@@ -45,7 +45,6 @@ def main(_):
   if FLAGS.debug:
     config.data.pretraining_video_sampler = "same_class"
   num_ctx_frames = config.frame_sampler.num_context_frames
-  num_frames = config.frame_sampler.num_frames_per_sequence
   pretrain_loaders = get_pretraining_dataloaders(config, FLAGS.debug)
   try:
     loader = pretrain_loaders["train"]
@@ -54,6 +53,7 @@ def main(_):
       logging.info("Batch #%d", batch_idx)
       frames = batch["frames"]
       b, _, c, h, w = frames.shape
+      num_frames = frames.shape[1] // num_ctx_frames
       frames = frames.view(b, num_frames, num_ctx_frames, c, h, w)
       for b in range(frames.shape[0]):
         logging.info("\tBatch Item %s", str(b))

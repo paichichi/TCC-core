@@ -15,6 +15,7 @@
 
 """Functionality common to pretraining and evaluation."""
 
+import os.path as osp
 from typing import Dict
 from ml_collections import ConfigDict
 
@@ -43,9 +44,16 @@ def get_pretraining_dataloaders(
   """
 
   def _loader(split):
-    dataset = factory.dataset_from_config(config, False, split, debug)
+    effective_split = split
+    if not osp.exists(osp.join(config.data.root, effective_split)):
+      effective_split = "train"
+    dataset = factory.dataset_from_config(config, effective_split, debug)
     batch_sampler = factory.video_sampler_from_config(
-        config, dataset.dir_tree, downstream=False, sequential=debug)
+        config,
+        dataset.dir_tree,
+        sequential=debug,
+        dataset_path=osp.join(config.data.root, effective_split),
+    )
     return torch.utils.data.DataLoader(
         dataset,
         collate_fn=dataset.collate_fn,
@@ -60,43 +68,6 @@ def get_pretraining_dataloaders(
   }
 
 
-def get_downstream_dataloaders(
-    config,
-    debug = False,
-):
-  """Construct a train/valid pair of downstream dataloaders.
-
-  Args:
-    config: ConfigDict object with config parameters.
-    debug: When set to True, the following happens: 1. Data augmentation is
-      disabled regardless of config values. 2. Sequential sampling of videos is
-      turned on. 3. The number of dataloader workers is set to 0.
-
-  Returns:
-    A dict of train/valid downstream dataloaders
-  """
-
-  def _loader(split):
-    datasets = factory.dataset_from_config(config, True, split, debug)
-    loaders = {}
-    for action_class, dataset in datasets.items():
-      batch_sampler = factory.video_sampler_from_config(
-          config, dataset.dir_tree, downstream=True, sequential=debug)
-      loaders[action_class] = torch.utils.data.DataLoader(
-          dataset,
-          collate_fn=dataset.collate_fn,
-          batch_sampler=batch_sampler,
-          num_workers=4 if torch.cuda.is_available() and not debug else 0,
-          pin_memory=torch.cuda.is_available() and not debug,
-      )
-    return loaders
-
-  return {
-      "train": _loader("train"),
-      "valid": _loader("valid"),
-  }
-
-
 def get_factories(
     config,
     device,
@@ -104,19 +75,10 @@ def get_factories(
 ):
   """Feed config to factories and return objects."""
   pretrain_loaders = get_pretraining_dataloaders(config, debug)
-  downstream_loaders = get_downstream_dataloaders(config, debug)
   model = factory.model_from_config(config)
   optimizer = factory.optim_from_config(config, model)
   trainer = factory.trainer_from_config(config, model, optimizer, device)
-  eval_manager = factory.evaluator_from_config(config)
-  return (
-      model,
-      optimizer,
-      pretrain_loaders,
-      downstream_loaders,
-      trainer,
-      eval_manager,
-  )
+  return model, optimizer, pretrain_loaders, trainer
 
 
 def get_model(config):

@@ -126,6 +126,15 @@ class FrameSampler(abc.ABC):
         "ctx_idxs": self._get_context_steps(frame_idxs, len(frames)),
     }
 
+  def sample_with_num_frames(self, vid_dirs, num_frames):
+    """Sample a video with a temporary per-call frame count override."""
+    old_num_frames = self._num_frames
+    self._num_frames = num_frames
+    try:
+      return self.sample(vid_dirs)
+    finally:
+      self._num_frames = old_num_frames
+
   @property
   def num_frames(self):
     return self._num_frames

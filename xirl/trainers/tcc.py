@@ -18,6 +18,7 @@
 from typing import Dict, List, Union
 
 import torch
+from xirl.losses import compute_paired_tcc_loss
 from xirl.losses import compute_tcc_loss
 from xirl.trainers.base import Trainer
 
@@ -42,6 +43,7 @@ class TCCTrainer(Trainer):
 
     self.normalize_embeddings = config.model.normalize_embeddings
     self.stochastic_matching = config.loss.tcc.stochastic_matching
+    self.paired_matching = config.loss.tcc.paired_matching
     self.loss_type = config.loss.tcc.loss_type
     self.similarity_type = config.loss.tcc.similarity_type
     self.cycle_length = config.loss.tcc.cycle_length
@@ -50,6 +52,9 @@ class TCCTrainer(Trainer):
     self.variance_lambda = config.loss.tcc.variance_lambda
     self.huber_delta = config.loss.tcc.huber_delta
     self.normalize_indices = config.loss.tcc.normalize_indices
+
+    if self.stochastic_matching and self.paired_matching:
+      raise ValueError("Paired TCC only supports deterministic matching.")
 
   def compute_loss(
       self,
@@ -63,6 +68,21 @@ class TCCTrainer(Trainer):
     # matching.
     batch_size, num_cc_frames = embs.shape[:2]
     num_cycles = int(batch_size * num_cc_frames)
+
+    if self.paired_matching:
+      return compute_paired_tcc_loss(
+          embs=embs,
+          idxs=steps,
+          seq_lens=seq_lens,
+          normalize_embeddings=self.normalize_embeddings,
+          loss_type=self.loss_type,
+          similarity_type=self.similarity_type,
+          temperature=self.temperature,
+          label_smoothing=self.label_smoothing,
+          variance_lambda=self.variance_lambda,
+          huber_delta=self.huber_delta,
+          normalize_indices=self.normalize_indices,
+      )
 
     return compute_tcc_loss(
         embs=embs,

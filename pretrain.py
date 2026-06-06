@@ -80,14 +80,8 @@ def main(_):
   logger = Logger(osp.join(exp_dir, "tb"), FLAGS.resume)
 
   # Load factories.
-  (
-      model,
-      optimizer,
-      pretrain_loaders,
-      downstream_loaders,
-      trainer,
-      eval_manager,
-  ) = common.get_factories(config, device)
+  model, optimizer, pretrain_loaders, trainer = common.get_factories(
+      config, device)
 
   # Create checkpoint manager.
   checkpoint_dir = osp.join(exp_dir, "checkpoints")
@@ -120,22 +114,6 @@ def main(_):
           )
           for k, v in valid_loss.items():
             logger.log_scalar(v, global_step, k, "pretrain")
-
-          # Evaluate the model on the downstream datasets.
-          for split, downstream_loader in downstream_loaders.items():
-            eval_to_metric = eval_manager.evaluate(
-                model,
-                downstream_loader,
-                device,
-                config.eval.val_iters,
-            )
-            for eval_name, eval_out in eval_to_metric.items():
-              eval_out.log(
-                  logger,
-                  global_step,
-                  eval_name,
-                  f"downstream/{split}",
-              )
 
         # Save model checkpoint.
         if not global_step % config.checkpointing_frequency:

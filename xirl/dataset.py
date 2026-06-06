@@ -141,7 +141,7 @@ class VideoDataset(Dataset):
     action_class = list(self._dir_tree)[class_idx]
     return self._dir_tree[action_class][vid_idx]
 
-  def _get_data(self, vid_path):
+  def _get_data(self, vid_path, num_frames=None):
     """Load video data given a video path.
 
     Feeds the video path to the frame sampler to retrieve video frames and
@@ -155,7 +155,11 @@ class VideoDataset(Dataset):
       member of `SequenceType` and the value is either an int, a string
       or an ndarray respecting the key type.
     """
-    sample = self._frame_sampler.sample(vid_path)
+    if num_frames is None:
+      sample = self._frame_sampler.sample(vid_path)
+    else:
+      sample = self._frame_sampler.sample_with_num_frames(
+          vid_path, num_frames)
 
     # Load each frame along with its context frames into an array of shape
     # (S, X, H, W, C), where S is the number of sampled frames and X is the
@@ -182,8 +186,11 @@ class VideoDataset(Dataset):
     }
 
   def __getitem__(self, idxs):
+    num_frames = None
+    if len(idxs) == 3:
+      *idxs, num_frames = idxs
     vid_paths = self._get_video_path(*idxs)
-    data_np = self._get_data(vid_paths)
+    data_np = self._get_data(vid_paths, num_frames)
     if self._augmentor:
       data_np = self._augmentor(data_np)
     data_tensor = self._totensor(data_np)

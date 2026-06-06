@@ -17,20 +17,13 @@
 
 import abc
 import math
-from typing import List, Union
+from typing import Union
 
 import dataclasses
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import models
-from torchvision.models.resnet import BasicBlock
-from torchvision.models.resnet import ResNet
-try:
-  from torchvision.models.utils import load_state_dict_from_url
-except ModuleNotFoundError:
-  from torch.hub import load_state_dict_from_url
 
 
 @dataclasses.dataclass
@@ -136,6 +129,159 @@ class SelfSupervisedModel(abc.ABC, nn.Module):
     return out.squeeze(0)
 
 
+def _unwrap_state_dict(checkpoint):
+  if isinstance(checkpoint, dict) and isinstance(checkpoint.get("model"), dict):
+    return checkpoint["model"]
+  if isinstance(checkpoint, dict) and isinstance(
+      checkpoint.get("state_dict"), dict):
+    return checkpoint["state_dict"]
+  return checkpoint
+
+
+def _mae_to_torchvision_vit_key(key):
+  if key == "cls_token":
+    return "class_token"
+  if key == "pos_embed":
+    return "encoder.pos_embedding"
+  if key == "patch_embed.proj.weight":
+    return "conv_proj.weight"
+  if key == "patch_embed.proj.bias":
+    return "conv_proj.bias"
+  if key == "norm.weight":
+    return "encoder.ln.weight"
+  if key == "norm.bias":
+    return "encoder.ln.bias"
+
+  parts = key.split(".")
+  if len(parts) < 4 or parts[0] != "blocks":
+    return None
+
+  block = f"encoder.layers.encoder_layer_{parts[1]}"
+  suffix = ".".join(parts[2:])
+  mapping = {
+      "norm1.weight": "ln_1.weight",
+      "norm1.bias": "ln_1.bias",
+      "attn.qkv.weight": "self_attention.in_proj_weight",
+      "attn.qkv.bias": "self_attention.in_proj_bias",
+      "attn.proj.weight": "self_attention.out_proj.weight",
+      "attn.proj.bias": "self_attention.out_proj.bias",
+      "norm2.weight": "ln_2.weight",
+      "norm2.bias": "ln_2.bias",
+      "mlp.fc1.weight": "mlp.0.weight",
+      "mlp.fc1.bias": "mlp.0.bias",
+      "mlp.fc2.weight": "mlp.3.weight",
+      "mlp.fc2.bias": "mlp.3.bias",
+  }
+  mapped_suffix = mapping.get(suffix)
+  if mapped_suffix is None:
+    return None
+  return f"{block}.{mapped_suffix}"
+
+
+class ViTB16Backbone(nn.Module):
+  """A torchvision ViT-B/16 backbone with optional checkpoint loading."""
+
+  output_dim = 768
+
+  def __init__(self, pretrain_path="", vit_weights="imagenet"):
+    super().__init__()
+    weights = None
+    if vit_weights == "imagenet" and not pretrain_path:
+      weights = models.ViT_B_16_Weights.IMAGENET1K_V1
+    elif vit_weights not in ["imagenet", "none", ""]:
+      raise ValueError(f"Unsupported ViT weights: {vit_weights}")
+
+    self.model = models.vit_b_16(weights=weights)
+    self.model.heads = nn.Identity()
+    if pretrain_path:
+      self.load_pretrained(pretrain_path)
+
+  def load_pretrained(self, checkpoint_path):
+    try:
+      checkpoint = torch.load(
+          checkpoint_path, map_location="cpu", weights_only=True)
+    except TypeError:
+      checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    source_state = _unwrap_state_dict(checkpoint)
+    target_state = self.model.state_dict()
+
+    mapped_state = {}
+    skipped = []
+    for key, value in source_state.items():
+      candidates = [
+          key,
+          key.removeprefix("module."),
+          key.removeprefix("backbone."),
+          key.removeprefix("backbone.model."),
+      ]
+      mapped_key = None
+      for candidate in candidates:
+        if candidate in target_state:
+          mapped_key = candidate
+          break
+      if mapped_key is None:
+        mapped_key = _mae_to_torchvision_vit_key(key)
+      if mapped_key in target_state and target_state[mapped_key].shape == value.shape:
+        mapped_state[mapped_key] = value
+      else:
+        skipped.append(key)
+
+    missing, unexpected = self.model.load_state_dict(mapped_state, strict=False)
+    print(
+        "ViTB16Backbone loaded "
+        f"{len(mapped_state)} tensors from {checkpoint_path}; "
+        f"missing={len(missing)}, unexpected={len(unexpected)}, "
+        f"skipped={len(skipped)}")
+    if missing:
+      print(f"ViTB16Backbone missing (first 20): {missing[:20]}")
+    if skipped:
+      print(f"ViTB16Backbone skipped source keys (first 20): {skipped[:20]}")
+
+  def forward(self, x):
+    return self.model(x)
+
+
+class ViTB16LinearEncoderNet(SelfSupervisedModel):
+  """A ViT-B/16 backbone with a linear TCC embedding head."""
+
+  def __init__(
+      self,
+      embedding_size,
+      pretrain_path="",
+      vit_weights="imagenet",
+      trainable_scope="all",
+      *args,
+      **kwargs,
+  ):
+    super().__init__(*args, **kwargs)
+    self.backbone = ViTB16Backbone(pretrain_path, vit_weights)
+    self.encoder = nn.Linear(self.backbone.output_dim, embedding_size)
+    self.set_trainable_scope(trainable_scope)
+
+  def set_trainable_scope(self, trainable_scope):
+    if trainable_scope == "all":
+      return
+
+    for param in self.parameters():
+      param.requires_grad = False
+
+    if trainable_scope in ["head", "layernorm_head", "ln_head"]:
+      for param in self.encoder.parameters():
+        param.requires_grad = True
+      if self.learnable_temp:
+        self.logit_scale.requires_grad = True
+
+    if trainable_scope in ["layernorm_head", "ln_head"]:
+      for module in self.backbone.modules():
+        if isinstance(module, nn.LayerNorm):
+          for param in module.parameters():
+            param.requires_grad = True
+      return
+
+    if trainable_scope != "head":
+      raise ValueError(f"Unsupported ViT trainable scope: {trainable_scope}")
+
+
 class Resnet18LinearEncoderNet(SelfSupervisedModel):
   """A resnet18 backbone with a linear encoder head."""
 
@@ -150,205 +296,3 @@ class Resnet18LinearEncoderNet(SelfSupervisedModel):
 
     # Encoder.
     self.encoder = nn.Linear(num_ftrs, embedding_size)
-
-
-class GoalClassifier(SelfSupervisedModel):
-  """A resnet18 backbone with a binary classification head."""
-
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-
-    # Visual backbone.
-    resnet = models.resnet18(pretrained=True)
-    num_ftrs = resnet.fc.in_features
-    layers_ = list(resnet.children())[:-1]
-    self.backbone = nn.Sequential(*layers_)
-
-    # Classification head.
-    self.encoder = nn.Linear(num_ftrs, 1)
-
-
-class Resnet18RawImageNetFeaturesNet(SelfSupervisedModel):
-  """A resnet18 backbone with an identity encoder head."""
-
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-
-    # Visual backbone.
-    resnet = models.resnet18(pretrained=True)
-    layers_ = list(resnet.children())[:-1]
-    self.backbone = nn.Sequential(*layers_)
-
-    # Identity encoder.
-    self.encoder = nn.Identity()
-
-
-class Upsampling(nn.Module):
-  """Unet upsampling adapted from [1].
-
-  References:
-    [1]: https://github.com/milesial/Pytorch-UNet
-  """
-
-  def __init__(self, in_channels, out_channels):
-    super().__init__()
-
-    self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-    self.conv = nn.Sequential(
-        nn.Conv2d(in_channels, in_channels // 2, kernel_size=3, padding=1),
-        nn.BatchNorm2d(in_channels // 2),
-        nn.ReLU(inplace=True),
-        nn.Conv2d(in_channels // 2, out_channels, kernel_size=3, padding=1),
-        nn.BatchNorm2d(out_channels),
-        nn.ReLU(inplace=True),
-    )
-
-  def forward(self, x1, x2):
-    x1 = self.up(x1)
-    diffy = x2.size()[2] - x1.size()[2]
-    diffx = x2.size()[3] - x1.size()[3]
-    x1 = F.pad(x1,
-               [diffx // 2, diffx - diffx // 2, diffy // 2, diffy - diffy // 2])
-    x = torch.cat([x2, x1], dim=1)
-    return self.conv(x)
-
-
-@dataclasses.dataclass
-class SelfSupervisedReconOutput(SelfSupervisedOutput):
-  """Self-supervised output with a reconstruction tensor."""
-
-  reconstruction: Union[np.ndarray, torch.FloatTensor]
-
-  def numpy(self):
-    kwargs = {}
-    for k, v in dataclasses.asdict(self).items():
-      if k != "frames" or k != "reconstruction":
-        kwargs[k] = v.cpu().detach().numpy()
-    kwargs["frames"] = self.frames.permute(0, 2, 3, 1).cpu().detach().numpy()
-    kwargs["reconstruction"] = self.reconstruction.permute(
-        0, 2, 3, 1).cpu().detach().numpy()
-    return self.__class__(**kwargs)
-
-
-class Resnet18LinearEncoderAutoEncoderNet(ResNet):
-  """Resnet18LinearEncoder with an auxiliary autoencoding path."""
-
-  def __init__(
-      self,
-      embedding_size,
-      num_ctx_frames,
-      normalize_embeddings,
-      learnable_temp,
-  ):
-    super().__init__(BasicBlock, [2, 2, 2, 2])
-
-    self.num_ctx_frames = num_ctx_frames
-    self.normalize_embeddings = normalize_embeddings
-    self.learnable_temp = learnable_temp
-
-    # Load pretrained weights.
-    state_dict = load_state_dict_from_url(
-        "https://download.pytorch.org/models/resnet18-5c106cde.pth",
-        progress=True,
-    )
-    self.load_state_dict(state_dict)
-
-    # Embedding head.
-    self.fc = nn.Linear(self.fc.in_features, embedding_size)
-
-    # Upsampling path.
-    self.up1 = Upsampling(1024, 512 // 2)
-    self.up2 = Upsampling(512, 256 // 2)
-    self.up3 = Upsampling(256, 128 // 2)
-    self.up4 = Upsampling(128, 64)
-    self.out_conv = nn.Conv2d(64, 3, kernel_size=1)
-
-    # Log-parameterized multiplicative softmax temperature param.
-    if learnable_temp:
-      self.logit_scale = nn.Parameter(torch.ones([]))
-
-  def encode(self, x):
-    # Compute embeddings.
-    batch_size, t, c, h, w = x.shape
-    x = x.view((batch_size * t, c, h, w))
-
-    x = self.conv1(x)
-    x = self.bn1(x)
-    x = self.relu(x)
-    x = self.maxpool(x)
-
-    x1 = self.layer1(x)  # B, 64, 56, 56
-    x2 = self.layer2(x1)  # B, 128, 28, 28
-    x3 = self.layer3(x2)  # B, 256, 14, 14
-    x4 = self.layer4(x3)  # B, 512, 7, 7
-
-    # Compute embeddings.
-    feats = self.avgpool(x4)  # B, 512, 1, 1
-    flat_feats = torch.flatten(feats, 1)
-    embs = self.fc(flat_feats)
-    if self.normalize_embeddings:
-      embs = embs / (embs.norm(dim=-1, keepdim=True) + 1e-7)
-    if self.learnable_temp:
-      logit_scale = self.logit_scale.exp()
-      embs = logit_scale * embs
-    embs = embs.view((batch_size, t, -1))
-
-    return embs, [x1, x2, x3, x4, feats]
-
-  def decode_all_res(self, feature_maps):
-    """Decode using all spatial resolutions, a la u-net."""
-    x1, x2, x3, x4, feats = feature_maps
-    x = self.up1(feats, x4)
-    x = self.up2(x, x3)
-    x = self.up3(x, x2)
-    x = self.up4(x, x1)
-    recon = self.out_conv(x)
-    return recon
-
-  def decode_lowest_res(self, feature_maps):
-    _, _, _, x, _ = feature_maps
-    for up_conv in self.up_convs:
-      x = F.relu(up_conv(x))
-      x = F.interpolate(
-          x,
-          scale_factor=2,
-          mode="bilinear",
-          recompute_scale_factor=False,
-          align_corners=True,
-      )
-    x = self.out_conv(x)
-    return x
-
-  def forward(self, x):
-    embs, feature_maps = self.encode(x)
-    recon = self.decode_all_res(feature_maps)
-    feats = feature_maps[-1]
-    feats = feats.view((embs.shape[0], embs.shape[1], *feats.shape[1:]))
-    recon = recon.view((embs.shape[0], embs.shape[1], *recon.shape[1:]))
-    return SelfSupervisedReconOutput(
-        frames=x,
-        feats=feats,
-        embs=embs,
-        reconstruction=recon,
-    )
-
-  @torch.no_grad()
-  def infer(
-      self,
-      x,
-      max_batch_size = 128,
-  ):
-    """Forward at inference with possible very large batch sizes."""
-    # Figure out a max batch size that's a multiple of the number of context
-    # frames. This is so we can support large videos with many frames.
-    lcm = self.num_ctx_frames
-    effective_bs = math.floor(max_batch_size / lcm) * lcm
-    if x.shape[1] > effective_bs:
-      out = []
-      for i in range(math.ceil(x.shape[1] / effective_bs)):
-        sub_frames = x[:, i * effective_bs:(i + 1) * effective_bs]
-        out.append(self.forward(sub_frames).cpu())
-      out = SelfSupervisedReconOutput.merge(out)
-    else:
-      out = self.forward(x).cpu()
-    return out.squeeze(0)

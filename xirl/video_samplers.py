@@ -16,6 +16,8 @@
 """Video samplers for mini-batch creation."""
 
 import abc
+import csv
+import pathlib
 from typing import Iterator, List, Tuple
 
 import numpy as np
@@ -127,17 +129,122 @@ class SameClassBatchSampler(VideoBatchSampler):
     return idxs
 
 
-class SameClassBatchSamplerDownstream(SameClassBatchSampler):
-  """A same class batch sampler with a batch size of 1.
+class PairedBatchSampler(Sampler):
+  """Samples adjacent human-robot pairs with a dynamic frame count.
 
-  This batch sampler is used for downstream datasets. Since such datasets
-  typically load a variable number of frames per video, we are forced to use
-  a batch size of 1.
+  The emitted batch order is:
+    [role_order[0]_0, role_order[1]_0, role_order[0]_1, role_order[1]_1, ...]
+
+  Each yielded index is `(class_idx, video_idx, num_frames)`. `num_frames` is
+  shared by the whole batch and is derived from the shortest sequence in that
+  batch.
   """
 
   def __init__(
       self,
       dir_tree,
+      batch_size,
       sequential=False,
+      metadata_path=None,
+      sample_ratio=0.5,
+      max_frames=40,
+      min_frames=16,
+      drop_short_pairs=True,
+      role_order=("h", "r"),
   ):
-    super().__init__(dir_tree, batch_size=1, sequential=sequential)
+    if batch_size < 2 or batch_size % 2:
+      raise ValueError("PairedBatchSampler requires an even batch size >= 2.")
+    if metadata_path is None:
+      raise ValueError("PairedBatchSampler requires a metadata CSV path.")
+    if sample_ratio <= 0:
+      raise ValueError("sample_ratio must be positive.")
+
+    self._dir_tree = dir_tree
+    self._batch_size = batch_size
+    self._pairs_per_batch = batch_size // 2
+    self._sequential = sequential
+    self._metadata_path = pathlib.Path(metadata_path)
+    self._sample_ratio = sample_ratio
+    self._max_frames = max_frames
+    self._min_frames = min_frames
+    self._drop_short_pairs = drop_short_pairs
+    self._role_order = tuple(role_order)
+    self._pairs = self._load_pairs()
+
+    if not self._pairs:
+      raise ValueError("No valid human-robot pairs were found.")
+
+  def _video_index(self):
+    index = {}
+    for class_idx, (class_path, video_paths) in enumerate(
+        self._dir_tree.items()):
+      task_id = pathlib.Path(class_path).stem
+      for video_idx, video_path in enumerate(video_paths):
+        sequence_id = pathlib.Path(video_path).stem
+        video_index = (class_idx, video_idx)
+        index[sequence_id] = video_index
+        index[(task_id, sequence_id)] = video_index
+    return index
+
+  def _load_pairs(self):
+    if not self._metadata_path.exists():
+      raise ValueError(f"Metadata CSV not found: {self._metadata_path}")
+
+    video_index = self._video_index()
+    with self._metadata_path.open("r", newline="") as fp:
+      rows = list(csv.DictReader(fp))
+    rows_by_id = {row["sequence_id"]: row for row in rows}
+
+    pairs = []
+    first_role, second_role = self._role_order
+    for row in rows:
+      if row["role"] != first_role:
+        continue
+      paired = rows_by_id.get(row["paired_sequence_id"])
+      if paired is None or paired["role"] != second_role:
+        continue
+      first_key = row["sequence_id"]
+      second_key = paired["sequence_id"]
+      if first_key not in video_index or second_key not in video_index:
+        continue
+
+      first_len = int(row["num_frames"])
+      second_len = int(paired["num_frames"])
+      pair_min_len = min(first_len, second_len)
+      if self._drop_short_pairs and pair_min_len < self._min_frames:
+        continue
+
+      pairs.append((video_index[first_key], video_index[second_key],
+                    pair_min_len))
+    return pairs
+
+  def _num_frames_for_batch(self, pairs):
+    batch_min_len = min(pair[-1] for pair in pairs)
+    num_frames = int(batch_min_len * self._sample_ratio)
+    num_frames = min(num_frames, self._max_frames)
+    num_frames = max(num_frames, self._min_frames)
+    return min(num_frames, batch_min_len)
+
+  def _generate_indices(self):
+    pair_idxs = list(range(len(self._pairs)))
+    if not self._sequential:
+      pair_idxs = [pair_idxs[i] for i in torch.randperm(len(pair_idxs))]
+
+    end = self._pairs_per_batch * (len(pair_idxs) // self._pairs_per_batch)
+    batches = []
+    for i in range(0, end, self._pairs_per_batch):
+      pairs = [self._pairs[idx] for idx in pair_idxs[i:i + self._pairs_per_batch]]
+      num_frames = self._num_frames_for_batch(pairs)
+
+      batch = []
+      for first_idx, second_idx, _ in pairs:
+        batch.append((*first_idx, num_frames))
+        batch.append((*second_idx, num_frames))
+      batches.append(batch)
+    return batches
+
+  def __iter__(self):
+    return iter(self._generate_indices())
+
+  def __len__(self):
+    return len(self._pairs) // self._pairs_per_batch

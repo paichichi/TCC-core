@@ -26,7 +26,7 @@ def get_config():
   # General experiment params.
   # ============================================== #
   # The root directory where experiments will be saved.
-  config.root_dir = "/tmp/xirl/pretrain_runs/"
+  config.root_dir = "/tmp/tcc-core/pretrain_runs/"
   # Rng seed. Set this to `none` to disable seeding.
   config.seed = 1
   # cudnn-related parameters that affect reproducibility.
@@ -45,7 +45,7 @@ def get_config():
   config.data = ml_collections.ConfigDict()
 
   # Absolute path to the dataset root.
-  config.data.root = "/tmp/xirl/datasets/xmagical/"
+  config.data.root = "/home/paichichi/data/RH20T/TCC_RH20T"
   # The mini-batch size. Note this only specifies the number of videos to
   # load frames from in a single batch. The effective batch size is actually
   # larger since we sample multiple frame sequences per video.
@@ -53,9 +53,6 @@ def get_config():
   # Which action classes to select for creating the pretraining dataset. Leave
   # it empty to load all action classes.
   config.data.pretrain_action_class = ()
-  # Which action classes to select for creating the dowstream dataset. Leave
-  # it empty to load all action classes.
-  config.data.downstream_action_class = ()
   # Restrict the number of videos per class. This is useful for experiments
   # that test sample complexity based on the number of pretraining
   # demonstrations.
@@ -63,7 +60,18 @@ def get_config():
   # This controls how a video batch is created. If set to 'random', videos
   # are sampled randomly from different classes. If set to 'same_class', only
   # videos belonging to the same class folder are sampled within a batch.
+  # If set to 'paired', adjacent batch entries are sampled as paired sequences
+  # from a metadata CSV: [h0, r0, h1, r1, ...].
   config.data.pretraining_video_sampler = "random"
+  # Optional metadata path for paired sampling. If empty, each split expects
+  # its own metadata at `config.data.root/{train,valid}/metadata.csv`.
+  config.data.paired_metadata_path = ""
+  # Batch-level dynamic frame count for paired sampling:
+  # T = min(max_frames, max(min_frames, floor(batch_min_len * ratio))).
+  config.data.paired_frame_sample_ratio = 0.5
+  config.data.paired_min_frames = 16
+  config.data.paired_drop_short_pairs = True
+  config.data.paired_role_order = ("h", "r")
 
   # ============================================== #
   # Frame sampling params.
@@ -120,43 +128,15 @@ def get_config():
   ]
 
   # ============================================== #
-  # Evaluator params.
+  # Validation params.
   # ============================================== #
   config.eval = ml_collections.ConfigDict()
 
-  # How many iterations of the downstream dataloaders to run. Set to None to
-  # evaluate the entire dataloader.
+  # How many validation dataloader iterations to run. Set to None to evaluate
+  # the entire validation dataloader.
   config.eval.val_iters = 20
-  # The number of steps in between every evaluation.
+  # The number of steps between validation passes.
   config.eval.eval_frequency = 500
-  # A list of downstream task evaluators that will be run sequentially every
-  # EVAL_FREQUENCY steps.
-  config.eval.downstream_task_evaluators = [
-      "reward_visualizer",
-      "kendalls_tau",
-  ]
-  # What distance metric to use in the embedding space. Should match what was
-  # used in the loss computation.
-  # Can be one of ['cosine', 'sqeuclidean'].
-  config.eval.distance = "sqeuclidean"
-
-  config.eval.kendalls_tau = ml_collections.ConfigDict()
-  config.eval.kendalls_tau.stride = 3
-
-  config.eval.reward_visualizer = ml_collections.ConfigDict()
-  config.eval.reward_visualizer.num_plots = 2
-
-  config.eval.cycle_consistency = ml_collections.ConfigDict()
-  config.eval.cycle_consistency.stride = 1
-
-  config.eval.nearest_neighbour_visualizer = ml_collections.ConfigDict()
-  config.eval.nearest_neighbour_visualizer.num_videos = 4
-
-  config.eval.embedding_visualizer = ml_collections.ConfigDict()
-  config.eval.embedding_visualizer.num_seqs = 2
-
-  config.eval.reconstruction_visualizer = ml_collections.ConfigDict()
-  config.eval.reconstruction_visualizer.num_frames = 2
 
   # ============================================== #
   # Model params.
@@ -167,6 +147,9 @@ def get_config():
   config.model.embedding_size = 32
   config.model.normalize_embeddings = False
   config.model.learnable_temp = False
+  config.model.pretrain_path = ""
+  config.model.vit_weights = "imagenet"
+  config.model.trainable_scope = "all"
 
   # ============================================== #
   # Loss params.
@@ -176,6 +159,9 @@ def get_config():
   ## TCC loss.
   config.loss.tcc = ml_collections.ConfigDict()
   config.loss.tcc.stochastic_matching = False
+  # If True, only adjacent batch items are aligned:
+  # [a0, b0, a1, b1, ...] -> a_i <-> b_i.
+  config.loss.tcc.paired_matching = False
   config.loss.tcc.loss_type = "regression_mse"
   config.loss.tcc.cycle_length = 2
   config.loss.tcc.label_smoothing = 0.1
@@ -184,18 +170,6 @@ def get_config():
   config.loss.tcc.variance_lambda = 0.001
   config.loss.tcc.huber_delta = 0.1
   config.loss.tcc.similarity_type = "l2"  # cosine
-
-  ## TCN loss.
-  config.loss.tcn = ml_collections.ConfigDict()
-  config.loss.tcn.pos_radius = 1
-  config.loss.tcn.neg_radius = 4
-  config.loss.tcn.num_pairs = 2
-  config.loss.tcn.margin = 1.0
-  config.loss.tcn.temperature = 0.1
-
-  ## LIFS loss.
-  config.loss.lifs = ml_collections.ConfigDict()
-  config.loss.lifs.temperature = 1.0
 
   # ============================================== #
   # Optimizer params

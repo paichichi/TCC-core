@@ -37,8 +37,9 @@ def one_hot(y, K, smooth_eps = 0):  # pylint: disable=invalid-name
   """
   assert 0 <= smooth_eps <= 1
   assert y.ndim == 1, "Label tensor must be rank 1."
-  y_hot = torch.eye(K)[y] * (1 - smooth_eps) + (smooth_eps / (K - 1))
-  return y_hot.to(y.device)
+  y_hot = torch.eye(K, device=y.device)[y] * (1 - smooth_eps)
+  y_hot = y_hot + (smooth_eps / (K - 1))
+  return y_hot
 
 
 def cross_entropy(
@@ -201,6 +202,85 @@ def compute_tcc_loss(
       huber_delta=huber_delta,
       normalize_indices=normalize_indices,
       normalize_dimension=(not normalize_embeddings),
+  )
+
+
+def compute_paired_tcc_loss(
+    embs,
+    idxs,
+    seq_lens,
+    normalize_embeddings = False,
+    loss_type = "classification",
+    similarity_type = "l2",
+    temperature = 0.1,
+    label_smoothing = 0.1,
+    variance_lambda = 0.001,
+    huber_delta = 0.1,
+    normalize_indices = True,
+):
+  """Computes deterministic TCC loss between adjacent sequence pairs.
+
+  The input batch is expected to be ordered as:
+    [a0, b0, a1, b1, ...]
+
+  Only the paired directions are aligned:
+    a_i -> b_i -> a_i
+    b_i -> a_i -> b_i
+
+  This avoids the all-pairs behavior used by `compute_tcc_loss`.
+  """
+  msg = "Invalid similarity type."
+  assert similarity_type in ["l2", "cosine"], msg
+  msg = "Invalid loss type."
+  assert loss_type in [
+      "regression_mse_var",
+      "regression_mse",
+      "regression_huber",
+      "classification",
+  ], msg
+
+  batch_size, num_cc = embs.shape[:2]
+  if batch_size < 2 or batch_size % 2:
+    raise ValueError(
+        "Paired TCC expects an even batch with at least one pair.")
+
+  labels_list = []
+  logits_list = []
+  steps_list = []
+  seq_lens_list = []
+  normalize_dimension = not normalize_embeddings
+
+  for i in range(0, batch_size, 2):
+    j = i + 1
+    for src, dst in ((i, j), (j, i)):
+      logits, labels = align_sequence_pair(
+          embs[src],
+          embs[dst],
+          similarity_type,
+          temperature,
+          normalize_dimension,
+      )
+      logits_list.append(logits)
+      labels_list.append(labels)
+      steps_list.append(idxs[src:src + 1].expand(num_cc, -1))
+      seq_lens_list.append(seq_lens[src:src + 1].expand(num_cc))
+
+  logits = torch.cat(logits_list, dim=0)
+  labels = torch.cat(labels_list, dim=0)
+  steps = torch.cat(steps_list, dim=0)
+  seq_lens = torch.cat(seq_lens_list, dim=0)
+
+  if loss_type == "classification":
+    return classification_loss(logits, labels, label_smoothing)
+  return regression_loss(
+      logits,
+      labels,
+      steps,
+      seq_lens,
+      loss_type,
+      normalize_indices,
+      variance_lambda,
+      huber_delta,
   )
 
 
