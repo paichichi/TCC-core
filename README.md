@@ -24,10 +24,10 @@ The paired RH20T sampler expects a root like:
   train/
     task_0001/
       000000/
-        000000.png
+        000000.jpg
         ...
       000001/
-        000000.png
+        000000.jpg
         ...
   manifest.csv
 ```
@@ -46,6 +46,30 @@ For paired TCC, a batch is ordered as:
 
 and TCC is computed only inside each adjacent human-robot pair.
 
+For paired sampling, the number of frames per video is controlled by:
+
+```yaml
+data:
+  video_sampler_seed: 1
+  paired_frame_sample_ratio: 0.5
+  paired_max_frames: -1
+  paired_min_frames: 16
+```
+
+`video_sampler_seed` controls the shuffled pair order. Use the same value to
+reproduce the same random pair sequence, or change it to sample a different
+order.
+
+With `paired_max_frames: -1`, the sampled frame count is:
+
+```text
+T = max(paired_min_frames, floor(shortest_video_len_in_batch * paired_frame_sample_ratio))
+```
+
+and is finally clamped so it never exceeds the shortest video in that batch.
+Set `paired_max_frames` to a positive number, such as `40`, only when you want
+an explicit upper bound.
+
 ## Useful Commands
 
 Debug one batch:
@@ -62,8 +86,29 @@ Start D4R ViT paired TCC pretraining:
 ```bash
 PYTHONPATH=/home/paichichi/projects/TCC-core \
 python pretrain.py \
-  --config=configs/rh20t/pretraining/paired_tcc_vit_d4r_in.py
+  --experiment_name=debug_layernorm \
+  --config_yaml=configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
 ```
 
 The current ViT configs use letterbox resize to fit native RH20T frames into a
 224x224 ViT-B/16 input while preserving aspect ratio.
+
+## Fine-Tuning Scope
+
+ViT fine-tuning is controlled by one config value:
+
+```yaml
+model:
+  trainable_scope: layernorm_head
+```
+
+Supported values:
+
+- `layernorm_head`: train ViT LayerNorm gamma/beta plus the TCC linear head.
+- `all`: train the full ViT backbone plus the TCC linear head.
+- `head`: train only the TCC linear head.
+
+Two D4R-IN YAML templates are provided:
+
+- `configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml`
+- `configs/rh20t/pretraining/paired_tcc_vit_d4r_in_full.yaml`

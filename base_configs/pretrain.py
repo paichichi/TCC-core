@@ -50,6 +50,8 @@ def get_config():
   # load frames from in a single batch. The effective batch size is actually
   # larger since we sample multiple frame sequences per video.
   config.data.batch_size = 4
+  # Seed for video/pair sampling. If None, falls back to config.seed.
+  config.data.video_sampler_seed = None
   # Which action classes to select for creating the pretraining dataset. Leave
   # it empty to load all action classes.
   config.data.pretrain_action_class = ()
@@ -67,8 +69,10 @@ def get_config():
   # its own metadata at `config.data.root/{train,valid}/metadata.csv`.
   config.data.paired_metadata_path = ""
   # Batch-level dynamic frame count for paired sampling:
-  # T = min(max_frames, max(min_frames, floor(batch_min_len * ratio))).
+  # T = max(min_frames, floor(batch_min_len * ratio)).
+  # Set paired_max_frames > 0 to add an explicit upper bound.
   config.data.paired_frame_sample_ratio = 0.5
+  config.data.paired_max_frames = -1
   config.data.paired_min_frames = 16
   config.data.paired_drop_short_pairs = True
   config.data.paired_role_order = ("h", "r")

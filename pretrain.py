@@ -28,6 +28,7 @@ from torchkit import experiment
 from torchkit import Logger
 from torchkit.utils.py_utils import Stopwatch
 from utils import setup_experiment
+from utils import update_config_from_yaml
 from xirl import common
 
 # pylint: disable=logging-fstring-interpolation
@@ -38,6 +39,11 @@ flags.DEFINE_string("experiment_name", None, "Experiment name.")
 flags.DEFINE_boolean("resume", False, "Whether to resume training.")
 flags.DEFINE_string("device", "cuda:0", "The compute device.")
 flags.DEFINE_boolean("raw_imagenet", False, "")
+flags.DEFINE_string(
+    "config_yaml",
+    None,
+    "Optional YAML file whose values override the Python config.",
+)
 
 config_flags.DEFINE_config_file(
     "config",
@@ -48,6 +54,9 @@ config_flags.DEFINE_config_file(
 
 @experiment.pdb_fallback
 def main(_):
+  if FLAGS.config_yaml:
+    update_config_from_yaml(FLAGS.config, FLAGS.config_yaml)
+
   # Make sure we have a valid config that inherits all the keys defined in the
   # base config.
   validate_config(FLAGS.config, mode="pretrain")

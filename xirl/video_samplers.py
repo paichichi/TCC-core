@@ -37,6 +37,7 @@ class VideoBatchSampler(abc.ABC, Sampler):
       dir_tree,
       batch_size,
       sequential=False,
+      seed=None,
   ):
     """Constructor.
 
@@ -44,12 +45,28 @@ class VideoBatchSampler(abc.ABC, Sampler):
       dir_tree: The directory tree of a `datasets.VideoDataset`.
       batch_size: The number of videos in a batch.
       sequential: Set to `True` to disable any shuffling or randomness.
+      seed: Optional seed for reproducible video sampling.
     """
     assert isinstance(batch_size, int)
 
     self._batch_size = batch_size
     self._dir_tree = dir_tree
     self._sequential = sequential
+    self._seed = seed
+    self._torch_generator = None
+    self._np_generator = None
+    if seed is not None:
+      self._torch_generator = torch.Generator()
+      self._torch_generator.manual_seed(seed)
+      self._np_generator = np.random.default_rng(seed)
+
+  def _randperm(self, n):
+    return torch.randperm(n, generator=self._torch_generator)
+
+  def _randint(self, high):
+    if self._np_generator is None:
+      return np.random.randint(0, high)
+    return self._np_generator.integers(0, high)
 
   @abc.abstractmethod
   def _generate_indices(self):
@@ -60,7 +77,7 @@ class VideoBatchSampler(abc.ABC, Sampler):
     idxs = self._generate_indices()
     if self._sequential:
       return iter(idxs)
-    return iter(idxs[i] for i in torch.randperm(len(idxs)))
+    return iter(idxs[i] for i in self._randperm(len(idxs)))
 
   def __len__(self):
     num_vids = 0
@@ -90,12 +107,12 @@ class RandomBatchSampler(VideoBatchSampler):
       seq = list(range(len(v)))
       all_idxs.extend([(k, s) for s in seq])
     # Shuffle the indices.
-    all_idxs = [all_idxs[i] for i in torch.randperm(len(all_idxs))]
+    all_idxs = [all_idxs[i] for i in self._randperm(len(all_idxs))]
     # If we have less total videos than the batch size, we pad with clones
     # until we reach a length of batch_size.
     if len(all_idxs) < self._batch_size:
       while len(all_idxs) < self._batch_size:
-        all_idxs.append(all_idxs[np.random.randint(0, len(all_idxs))])
+        all_idxs.append(all_idxs[self._randint(len(all_idxs))])
     # Split the list of indices into chunks of len `batch_size`.
     idxs = []
     end = self._batch_size * (len(all_idxs) // self._batch_size)
@@ -115,7 +132,7 @@ class SameClassBatchSampler(VideoBatchSampler):
       len_v = len(v)
       seq = list(range(len_v))
       if not self._sequential:
-        seq = [seq[i] for i in torch.randperm(len(seq))]
+        seq = [seq[i] for i in self._randperm(len(seq))]
       # Split the list of indices into chunks of len `batch_size`,
       # ensuring we drop the last chunk if it is not of adequate length.
       batch_idxs = []
@@ -147,10 +164,11 @@ class PairedBatchSampler(Sampler):
       sequential=False,
       metadata_path=None,
       sample_ratio=0.5,
-      max_frames=40,
+      max_frames=-1,
       min_frames=16,
       drop_short_pairs=True,
       role_order=("h", "r"),
+      seed=None,
   ):
     if batch_size < 2 or batch_size % 2:
       raise ValueError("PairedBatchSampler requires an even batch size >= 2.")
@@ -169,6 +187,11 @@ class PairedBatchSampler(Sampler):
     self._min_frames = min_frames
     self._drop_short_pairs = drop_short_pairs
     self._role_order = tuple(role_order)
+    self._seed = seed
+    self._torch_generator = None
+    if seed is not None:
+      self._torch_generator = torch.Generator()
+      self._torch_generator.manual_seed(seed)
     self._pairs = self._load_pairs()
 
     if not self._pairs:
@@ -221,14 +244,18 @@ class PairedBatchSampler(Sampler):
   def _num_frames_for_batch(self, pairs):
     batch_min_len = min(pair[-1] for pair in pairs)
     num_frames = int(batch_min_len * self._sample_ratio)
-    num_frames = min(num_frames, self._max_frames)
+    if self._max_frames is not None and self._max_frames > 0:
+      num_frames = min(num_frames, self._max_frames)
     num_frames = max(num_frames, self._min_frames)
     return min(num_frames, batch_min_len)
 
   def _generate_indices(self):
     pair_idxs = list(range(len(self._pairs)))
     if not self._sequential:
-      pair_idxs = [pair_idxs[i] for i in torch.randperm(len(pair_idxs))]
+      pair_idxs = [
+          pair_idxs[i] for i in torch.randperm(
+              len(pair_idxs), generator=self._torch_generator)
+      ]
 
     end = self._pairs_per_batch * (len(pair_idxs) // self._pairs_per_batch)
     batches = []

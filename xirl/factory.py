@@ -170,6 +170,9 @@ def video_sampler_from_config(
       "dir_tree": dir_tree,
       "batch_size": config.data.batch_size,
       "sequential": sequential,
+      "seed": (
+          config.seed if config.data.video_sampler_seed is None
+          else config.data.video_sampler_seed),
   }
   if config.data.pretraining_video_sampler == "paired":
     metadata_path = config.data.paired_metadata_path
@@ -180,7 +183,7 @@ def video_sampler_from_config(
     kwargs.update({
         "metadata_path": metadata_path,
         "sample_ratio": config.data.paired_frame_sample_ratio,
-        "max_frames": config.frame_sampler.num_frames_per_sequence,
+        "max_frames": config.data.paired_max_frames,
         "min_frames": config.data.paired_min_frames,
         "drop_short_pairs": config.data.paired_drop_short_pairs,
         "role_order": config.data.paired_role_order,

@@ -68,6 +68,23 @@ def load_config_from_dir(
   return ConfigDict(cfg)
 
 
+def update_config_from_yaml(config, yaml_path):
+  """Recursively update a ConfigDict from a YAML file."""
+  with open(yaml_path, "r") as fp:
+    updates = yaml.load(fp, Loader=yaml.FullLoader)
+
+  def _update(node, values, prefix=""):
+    for key, value in values.items():
+      if key not in node:
+        raise ValueError(f"Unknown config key in YAML: {prefix}{key}")
+      if isinstance(node[key], ConfigDict) and isinstance(value, dict):
+        _update(node[key], value, f"{prefix}{key}.")
+      else:
+        node[key] = value
+
+  _update(config, updates)
+
+
 def dump_config(exp_dir, config):
   """Dump config to disk."""
   # Note: No need to explicitly delete the previous config file as "w" will
