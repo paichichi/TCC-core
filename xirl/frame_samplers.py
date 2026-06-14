@@ -16,6 +16,8 @@
 """Video frame samplers."""
 
 import abc
+import csv
+import pathlib
 import random
 from absl import logging
 
@@ -35,6 +37,8 @@ class FrameSampler(abc.ABC):
       ctx_stride=1,
       pattern="*.png",
       seed=None,
+      start_frame_metadata_path="",
+      use_start_frame=False,
   ):
     """Constructor.
 
@@ -45,6 +49,8 @@ class FrameSampler(abc.ABC):
       ctx_stride: The spacing between sampled context frames.
       pattern: The wildcard pattern for the video frames.
       seed: The seed for the rng.
+      start_frame_metadata_path: Optional CSV containing sequence_id/start_frame.
+      use_start_frame: Whether to drop frames before metadata start_frame.
     """
     assert num_ctx_frames > 0, "num_ctx_frames must be >= 1."
     assert isinstance(num_frames, int), "num_frames must be an int."
@@ -56,8 +62,23 @@ class FrameSampler(abc.ABC):
     self._ctx_stride = ctx_stride
     self._pattern = pattern
     self._seed = seed
+    self._use_start_frame = use_start_frame
+    self._start_frames = self._load_start_frames(start_frame_metadata_path)
 
     self.seed_rng()
+
+  def _load_start_frames(self, metadata_path):
+    if not self._use_start_frame or not metadata_path:
+      return {}
+    metadata_path = pathlib.Path(metadata_path)
+    if not metadata_path.exists():
+      raise ValueError(f"Start-frame metadata CSV not found: {metadata_path}")
+    start_frames = {}
+    with metadata_path.open("r", newline="") as fp:
+      for row in csv.DictReader(fp):
+        if "sequence_id" in row and "start_frame" in row:
+          start_frames[row["sequence_id"]] = int(row["start_frame"] or 0)
+    return start_frames
 
   def seed_rng(self):
     """Reseed the RNG."""
@@ -119,10 +140,18 @@ class FrameSampler(abc.ABC):
     """
     frames = self._load_frames(vid_dirs)
     frame_idxs = self._sample(frames)
+    if len(frames) <= 1:
+      raise ValueError(
+          "TCC frame sampling requires an effective segment with at least "
+          "two frames.")
+    # TCC regression expects `frame_idxs / vid_len` to be local progress.
+    # Since frame_idxs are zero-based local steps, the final frame is
+    # len(frames) - 1 and must normalize to exactly 1.0.
+    segment_span = len(frames) - 1
     return {
         "frames": frames,
         "frame_idxs": frame_idxs,
-        "vid_len": len(frames),
+        "vid_len": segment_span,
         "ctx_idxs": self._get_context_steps(frame_idxs, len(frames)),
     }
 
@@ -151,7 +180,15 @@ class SingleVideoFrameSampler(FrameSampler):
   """
 
   def _load_frames(self, vid_dir):
-    return get_files(vid_dir, self._pattern, sort_numerical=True)
+    frames = get_files(vid_dir, self._pattern, sort_numerical=True)
+    if not self._start_frames:
+      return frames
+    sequence_id = pathlib.Path(vid_dir).stem
+    start_frame = self._start_frames.get(sequence_id, 0)
+    if start_frame <= 0:
+      return frames
+    start_frame = min(start_frame, max(0, len(frames) - 1))
+    return frames[start_frame:]
 
 
 class StridedSampler(SingleVideoFrameSampler):
@@ -274,6 +311,8 @@ class UniformSampler(SingleVideoFrameSampler):
 
   def _sample(self, frames):
     vid_len = len(frames)
+    if vid_len == 0:
+      raise ValueError("Cannot sample frames from an empty video directory.")
     cond1 = vid_len >= self._offset
     cond2 = self._num_frames < (vid_len - self._offset)
     if cond1 and cond2:
@@ -281,7 +320,95 @@ class UniformSampler(SingleVideoFrameSampler):
       random.shuffle(cc_idxs)
       cc_idxs = cc_idxs[:self._num_frames]
       return sorted(cc_idxs)
-    return list(range(0, self._num_frames))
+    start = min(self._offset, vid_len - 1)
+    cc_idxs = list(range(start, vid_len))
+    pad_len = self._num_frames - len(cc_idxs)
+    return cc_idxs + [vid_len - 1] * pad_len
+
+
+class BoundaryStratifiedSampler(SingleVideoFrameSampler):
+  """Fix first/last frames and sample middle frames."""
+
+  def __init__(
+      self,
+      random_middle=True,
+      middle_strategy="stratified",
+      *args,
+      **kwargs,
+  ):
+    """Constructor.
+
+    Args:
+      random_middle: If True, sample one random frame from each middle segment.
+        If False, use segment centers for deterministic evaluation.
+      middle_strategy: "stratified" samples one frame per temporal segment;
+        "random" samples all middle frames uniformly from the full middle.
+      *args: Args.
+      **kwargs: Keyword args.
+    """
+    super().__init__(*args, **kwargs)
+    if middle_strategy not in ["stratified", "random"]:
+      raise ValueError(f"Unsupported middle_strategy: {middle_strategy}")
+    self._random_middle = random_middle
+    self._middle_strategy = middle_strategy
+
+  def _validate_sample(self, frame_idxs, vid_len):
+    if len(frame_idxs) != self._num_frames:
+      raise ValueError(
+          f"Expected {self._num_frames} sampled frames, got {len(frame_idxs)}.")
+    if frame_idxs[0] != 0:
+      raise ValueError("BoundaryStratifiedSampler must include local step 0.")
+    if frame_idxs[-1] != vid_len - 1:
+      raise ValueError(
+          "BoundaryStratifiedSampler must include the effective final frame.")
+    if any(idx < 0 or idx >= vid_len for idx in frame_idxs):
+      raise ValueError("Sampled frame index is outside the effective segment.")
+    if any(left > right for left, right in zip(frame_idxs, frame_idxs[1:])):
+      raise ValueError("Sampled frame indices must be non-decreasing.")
+
+  def _sample(self, frames):
+    vid_len = len(frames)
+    if vid_len == 0:
+      raise ValueError("Cannot sample frames from an empty video directory.")
+    if self._num_frames <= 1:
+      return [0]
+    if self._num_frames == 2:
+      return [0, vid_len - 1]
+
+    if vid_len < self._num_frames:
+      cc_idxs = list(range(vid_len))
+      cc_idxs = cc_idxs + [vid_len - 1] * (self._num_frames - vid_len)
+      self._validate_sample(cc_idxs, vid_len)
+      return cc_idxs
+
+    middle_count = self._num_frames - 2
+    middle = list(range(1, vid_len - 1))
+    if len(middle) < middle_count:
+      cc_idxs = [0] + middle + [vid_len - 1]
+      cc_idxs = cc_idxs + [vid_len - 1] * (self._num_frames - len(cc_idxs))
+      self._validate_sample(cc_idxs, vid_len)
+      return cc_idxs
+
+    if self._middle_strategy == "random":
+      middle_idxs = random.sample(middle, middle_count)
+      cc_idxs = [0] + sorted(middle_idxs) + [vid_len - 1]
+      self._validate_sample(cc_idxs, vid_len)
+      return cc_idxs
+
+    edges = np.linspace(0, len(middle), middle_count + 1).round().astype(int)
+    middle_idxs = []
+    for left, right in zip(edges[:-1], edges[1:]):
+      if right <= left:
+        choice = middle[min(left, len(middle) - 1)]
+      elif self._random_middle:
+        choice = middle[random.randrange(left, right)]
+      else:
+        choice = middle[(left + right - 1) // 2]
+      middle_idxs.append(choice)
+
+    cc_idxs = [0] + middle_idxs + [vid_len - 1]
+    self._validate_sample(cc_idxs, vid_len)
+    return cc_idxs
 
 
 class WindowSampler(SingleVideoFrameSampler):

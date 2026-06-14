@@ -1,0 +1,413 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>Same-side timestamp alignment review</title>
+<style>
+body{font-family:Arial,sans-serif;margin:20px;background:#f6f7f8;color:#161616}
+h1{font-size:24px;margin:0 0 8px}
+h2{font-size:18px;margin:28px 0 8px}
+.meta{color:#555;margin:4px 0 12px}
+.row{margin:14px 0 22px;padding:12px;background:white;border:1px solid #ddd;border-radius:8px}
+.rowhead{font-weight:700;margin-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+img{width:100%;height:auto;display:block;border-radius:4px}
+.ok{color:#19713f}.bad{color:#a23b2f}
+code{background:#eee;padding:2px 5px;border-radius:4px}
+</style></head><body>
+<h1>Same-side Multi-view Timestamp Alignment Review</h1>
+<div class='meta'>Nearest timestamp alignment. Green label means |delta| <= 33.0 ms.</div>
+<h2>01_human_task_0001_user_0001_scene_0001_cfg_0001_human</h2>
+<div class='meta'>side=<code>human</code> episode=<code>task_0001_user_0001_scene_0001_cfg_0001_human</code> overlap=17.315s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=1.633s, target_ts=1629519032785, max_abs_delta=<span class='ok'>8 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 26'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 33'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 27'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 18'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=4.009s, target_ts=1629519035161, max_abs_delta=<span class='ok'>27 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 53'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 60'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 54'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 28'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=5.770s, target_ts=1629519036922, max_abs_delta=<span class='ok'>20 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 73'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 80'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 74'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 48'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=7.843s, target_ts=1629519038995, max_abs_delta=<span class='ok'>27 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 97'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 104'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 98'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 72'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=9.993s, target_ts=1629519041145, max_abs_delta=<span class='ok'>31 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 122'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 129'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 123'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 97'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=12.611s, target_ts=1629519043763, max_abs_delta=<span class='ok'>27 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 151'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 159'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 153'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 127'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=13.708s, target_ts=1629519044860, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 163'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 171'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 165'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 140'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=16.461s, target_ts=1629519047613, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 193'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 202'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 197'>
+<img src='frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 172'>
+</div></div>
+<h2>02_robot_task_0001_user_0001_scene_0001_cfg_0001</h2>
+<div class='meta'>side=<code>robot</code> episode=<code>task_0001_user_0001_scene_0001_cfg_0001</code> overlap=28.708s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=1.509s, target_ts=1629432630260, max_abs_delta=<span class='ok'>32 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 28'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 33'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 30'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 15'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=5.426s, target_ts=1629432634177, max_abs_delta=<span class='ok'>24 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 65'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 72'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 71'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 41'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=8.826s, target_ts=1629432637577, max_abs_delta=<span class='ok'>26 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 99'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 104'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 104'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 63'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=12.721s, target_ts=1629432641472, max_abs_delta=<span class='ok'>28 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 137'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 145'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 143'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 88'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=16.076s, target_ts=1629432644827, max_abs_delta=<span class='ok'>22 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 170'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 178'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 174'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 120'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=19.586s, target_ts=1629432648337, max_abs_delta=<span class='ok'>22 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 203'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 212'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 211'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 153'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=23.193s, target_ts=1629432651944, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 236'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 249'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 246'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 187'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=27.520s, target_ts=1629432656271, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 275'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 292'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 287'>
+<img src='frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 217'>
+</div></div>
+<h2>03_human_task_0001_user_0001_scene_0002_cfg_0001_human</h2>
+<div class='meta'>side=<code>human</code> episode=<code>task_0001_user_0001_scene_0002_cfg_0001_human</code> overlap=9.496s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=0.439s, target_ts=1629519129494, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 12'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 18'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 12'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 4'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=0.955s, target_ts=1629519130010, max_abs_delta=<span class='ok'>24 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 18'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 24'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 18'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 10'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=2.065s, target_ts=1629519131120, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 31'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 37'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 31'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 23'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=3.176s, target_ts=1629519132231, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 43'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 50'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 44'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 36'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=4.389s, target_ts=1629519133444, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 57'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 64'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 58'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 48'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=5.684s, target_ts=1629519134739, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 72'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 79'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 73'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 63'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=6.113s, target_ts=1629519135168, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 77'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 84'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 78'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 68'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=8.962s, target_ts=1629519138017, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 109'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 116'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 109'>
+<img src='frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 99'>
+</div></div>
+<h2>04_robot_task_0001_user_0001_scene_0002_cfg_0001</h2>
+<div class='meta'>side=<code>robot</code> episode=<code>task_0001_user_0001_scene_0002_cfg_0001</code> overlap=38.995s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=3.267s, target_ts=1629432748774, max_abs_delta=<span class='ok'>22 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 44'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 53'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 53'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 23'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=7.969s, target_ts=1629432753476, max_abs_delta=<span class='ok'>29 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 88'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 103'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 97'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 55'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=12.872s, target_ts=1629432758379, max_abs_delta=<span class='ok'>31 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 132'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 153'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 146'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 95'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=17.972s, target_ts=1629432763479, max_abs_delta=<span class='ok'>23 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 181'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 200'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 198'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 142'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=22.247s, target_ts=1629432767754, max_abs_delta=<span class='ok'>18 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 220'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 242'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 239'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 184'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=26.707s, target_ts=1629432772214, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 263'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 282'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 281'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 226'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=32.213s, target_ts=1629432777720, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 316'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 337'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 334'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 272'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=36.402s, target_ts=1629432781909, max_abs_delta=<span class='ok'>29 ms</span></div>
+<div class='grid'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 357'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 379'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 376'>
+<img src='frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 311'>
+</div></div>
+<h2>05_human_task_0001_user_0001_scene_0003_cfg_0001_human</h2>
+<div class='meta'>side=<code>human</code> episode=<code>task_0001_user_0001_scene_0003_cfg_0001_human</code> overlap=8.948s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=1.778s, target_ts=1629519170294, max_abs_delta=<span class='ok'>25 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 27'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 32'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 33'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 18'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=2.535s, target_ts=1629519171051, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 35'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 41'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 41'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 26'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=3.907s, target_ts=1629519172423, max_abs_delta=<span class='ok'>22 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 49'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 56'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 56'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 41'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=4.611s, target_ts=1629519173127, max_abs_delta=<span class='ok'>31 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 57'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 64'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 64'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 49'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=5.621s, target_ts=1629519174137, max_abs_delta=<span class='ok'>32 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 68'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 76'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 75'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 61'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=6.565s, target_ts=1629519175081, max_abs_delta=<span class='ok'>27 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 79'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 87'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 86'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 72'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=7.784s, target_ts=1629519176300, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 91'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 99'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 98'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 84'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=8.879s, target_ts=1629519177395, max_abs_delta=<span class='ok'>23 ms</span></div>
+<div class='grid'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 102'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 111'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 110'>
+<img src='frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 96'>
+</div></div>
+<h2>06_robot_task_0001_user_0001_scene_0003_cfg_0001</h2>
+<div class='meta'>side=<code>robot</code> episode=<code>task_0001_user_0001_scene_0003_cfg_0001</code> overlap=23.811s cameras=cam_035622060973, cam_038522062547, cam_038522063145, cam_039422060546</div>
+<div class='row'>
+<div class='rowhead'>t00: elapsed=3.117s, target_ts=1629432883941, max_abs_delta=<span class='ok'>32 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_035622060973.jpg' alt='cam_035622060973 frame 46'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_038522062547.jpg' alt='cam_038522062547 frame 54'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_038522063145.jpg' alt='cam_038522063145 frame 42'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_039422060546.jpg' alt='cam_039422060546 frame 28'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t01: elapsed=5.471s, target_ts=1629432886295, max_abs_delta=<span class='ok'>33 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_035622060973.jpg' alt='cam_035622060973 frame 70'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_038522062547.jpg' alt='cam_038522062547 frame 79'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_038522063145.jpg' alt='cam_038522063145 frame 65'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_039422060546.jpg' alt='cam_039422060546 frame 52'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t02: elapsed=8.112s, target_ts=1629432888936, max_abs_delta=<span class='ok'>32 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_035622060973.jpg' alt='cam_035622060973 frame 95'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_038522062547.jpg' alt='cam_038522062547 frame 105'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_038522063145.jpg' alt='cam_038522063145 frame 93'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_039422060546.jpg' alt='cam_039422060546 frame 76'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t03: elapsed=10.711s, target_ts=1629432891535, max_abs_delta=<span class='ok'>27 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_035622060973.jpg' alt='cam_035622060973 frame 120'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_038522062547.jpg' alt='cam_038522062547 frame 132'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_038522063145.jpg' alt='cam_038522063145 frame 119'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_039422060546.jpg' alt='cam_039422060546 frame 100'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t04: elapsed=14.241s, target_ts=1629432895065, max_abs_delta=<span class='ok'>14 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_035622060973.jpg' alt='cam_035622060973 frame 156'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_038522062547.jpg' alt='cam_038522062547 frame 165'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_038522063145.jpg' alt='cam_038522063145 frame 154'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_039422060546.jpg' alt='cam_039422060546 frame 122'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t05: elapsed=16.727s, target_ts=1629432897551, max_abs_delta=<span class='ok'>18 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_035622060973.jpg' alt='cam_035622060973 frame 181'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_038522062547.jpg' alt='cam_038522062547 frame 190'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_038522063145.jpg' alt='cam_038522063145 frame 177'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_039422060546.jpg' alt='cam_039422060546 frame 148'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t06: elapsed=19.826s, target_ts=1629432900650, max_abs_delta=<span class='ok'>32 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_035622060973.jpg' alt='cam_035622060973 frame 211'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_038522062547.jpg' alt='cam_038522062547 frame 223'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_038522063145.jpg' alt='cam_038522063145 frame 206'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_039422060546.jpg' alt='cam_039422060546 frame 174'>
+</div></div>
+<div class='row'>
+<div class='rowhead'>t07: elapsed=22.596s, target_ts=1629432903420, max_abs_delta=<span class='ok'>30 ms</span></div>
+<div class='grid'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_035622060973.jpg' alt='cam_035622060973 frame 238'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_038522062547.jpg' alt='cam_038522062547 frame 252'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_038522063145.jpg' alt='cam_038522063145 frame 231'>
+<img src='frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_039422060546.jpg' alt='cam_039422060546 frame 180'>
+</div></div>
+</body></html>

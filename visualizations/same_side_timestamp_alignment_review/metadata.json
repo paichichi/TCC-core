@@ -1,0 +1,1970 @@
+[
+  {
+    "sample_id": "01_human_task_0001_user_0001_scene_0001_cfg_0001_human",
+    "side": "human",
+    "episode": "task_0001_user_0001_scene_0001_cfg_0001_human",
+    "overlap_start": 1629519031152,
+    "overlap_end": 1629519048467,
+    "overlap_duration_ms": 17315,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629519032785,
+        "elapsed_ms": 1633,
+        "max_abs_delta_ms": 8,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 26,
+            "timestamp": 1629519032778,
+            "delta_ms": -7,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 33,
+            "timestamp": 1629519032785,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 27,
+            "timestamp": 1629519032779,
+            "delta_ms": -6,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 18,
+            "timestamp": 1629519032777,
+            "delta_ms": -8,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519035161,
+        "elapsed_ms": 4009,
+        "max_abs_delta_ms": 27,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 53,
+            "timestamp": 1629519035162,
+            "delta_ms": 1,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 60,
+            "timestamp": 1629519035161,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 54,
+            "timestamp": 1629519035141,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 28,
+            "timestamp": 1629519035134,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519036922,
+        "elapsed_ms": 5770,
+        "max_abs_delta_ms": 20,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 73,
+            "timestamp": 1629519036902,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 80,
+            "timestamp": 1629519036922,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 74,
+            "timestamp": 1629519036936,
+            "delta_ms": 14,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 48,
+            "timestamp": 1629519036911,
+            "delta_ms": -11,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519038995,
+        "elapsed_ms": 7843,
+        "max_abs_delta_ms": 27,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 97,
+            "timestamp": 1629519038972,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 104,
+            "timestamp": 1629519038995,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 98,
+            "timestamp": 1629519039018,
+            "delta_ms": 23,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 72,
+            "timestamp": 1629519038968,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519041145,
+        "elapsed_ms": 9993,
+        "max_abs_delta_ms": 31,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 122,
+            "timestamp": 1629519041138,
+            "delta_ms": -7,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 129,
+            "timestamp": 1629519041145,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 123,
+            "timestamp": 1629519041176,
+            "delta_ms": 31,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 97,
+            "timestamp": 1629519041126,
+            "delta_ms": -19,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519043763,
+        "elapsed_ms": 12611,
+        "max_abs_delta_ms": 27,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 151,
+            "timestamp": 1629519043762,
+            "delta_ms": -1,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 159,
+            "timestamp": 1629519043763,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 153,
+            "timestamp": 1629519043790,
+            "delta_ms": 27,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 127,
+            "timestamp": 1629519043737,
+            "delta_ms": -26,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519044860,
+        "elapsed_ms": 13708,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 163,
+            "timestamp": 1629519044893,
+            "delta_ms": 33,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 171,
+            "timestamp": 1629519044860,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 165,
+            "timestamp": 1629519044837,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 140,
+            "timestamp": 1629519044859,
+            "delta_ms": -1,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519047613,
+        "elapsed_ms": 16461,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 193,
+            "timestamp": 1629519047629,
+            "delta_ms": 16,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 202,
+            "timestamp": 1629519047613,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 197,
+            "timestamp": 1629519047646,
+            "delta_ms": 33,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 172,
+            "timestamp": 1629519047602,
+            "delta_ms": -11,
+            "ok": true,
+            "image": "frames/01_human_task_0001_user_0001_scene_0001_cfg_0001_human_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sample_id": "02_robot_task_0001_user_0001_scene_0001_cfg_0001",
+    "side": "robot",
+    "episode": "task_0001_user_0001_scene_0001_cfg_0001",
+    "overlap_start": 1629432628751,
+    "overlap_end": 1629432657459,
+    "overlap_duration_ms": 28708,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629432630260,
+        "elapsed_ms": 1509,
+        "max_abs_delta_ms": 32,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 28,
+            "timestamp": 1629432630233,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 33,
+            "timestamp": 1629432630260,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 30,
+            "timestamp": 1629432630228,
+            "delta_ms": -32,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 15,
+            "timestamp": 1629432630274,
+            "delta_ms": 14,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432634177,
+        "elapsed_ms": 5426,
+        "max_abs_delta_ms": 24,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 65,
+            "timestamp": 1629432634160,
+            "delta_ms": -17,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 72,
+            "timestamp": 1629432634177,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 71,
+            "timestamp": 1629432634153,
+            "delta_ms": -24,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 41,
+            "timestamp": 1629432634163,
+            "delta_ms": -14,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432637577,
+        "elapsed_ms": 8826,
+        "max_abs_delta_ms": 26,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 99,
+            "timestamp": 1629432637603,
+            "delta_ms": 26,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 104,
+            "timestamp": 1629432637577,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 104,
+            "timestamp": 1629432637598,
+            "delta_ms": 21,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 63,
+            "timestamp": 1629432637594,
+            "delta_ms": 17,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432641472,
+        "elapsed_ms": 12721,
+        "max_abs_delta_ms": 28,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 137,
+            "timestamp": 1629432641458,
+            "delta_ms": -14,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 145,
+            "timestamp": 1629432641472,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 143,
+            "timestamp": 1629432641500,
+            "delta_ms": 28,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 88,
+            "timestamp": 1629432641457,
+            "delta_ms": -15,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432644827,
+        "elapsed_ms": 16076,
+        "max_abs_delta_ms": 22,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 170,
+            "timestamp": 1629432644812,
+            "delta_ms": -15,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 178,
+            "timestamp": 1629432644827,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 174,
+            "timestamp": 1629432644822,
+            "delta_ms": -5,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 120,
+            "timestamp": 1629432644849,
+            "delta_ms": 22,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432648337,
+        "elapsed_ms": 19586,
+        "max_abs_delta_ms": 22,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 203,
+            "timestamp": 1629432648317,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 212,
+            "timestamp": 1629432648337,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 211,
+            "timestamp": 1629432648336,
+            "delta_ms": -1,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 153,
+            "timestamp": 1629432648315,
+            "delta_ms": -22,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432651944,
+        "elapsed_ms": 23193,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 236,
+            "timestamp": 1629432651977,
+            "delta_ms": 33,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 249,
+            "timestamp": 1629432651944,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 246,
+            "timestamp": 1629432651971,
+            "delta_ms": 27,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 187,
+            "timestamp": 1629432651940,
+            "delta_ms": -4,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432656271,
+        "elapsed_ms": 27520,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 275,
+            "timestamp": 1629432656241,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 292,
+            "timestamp": 1629432656271,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 287,
+            "timestamp": 1629432656254,
+            "delta_ms": -17,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 217,
+            "timestamp": 1629432656246,
+            "delta_ms": -25,
+            "ok": true,
+            "image": "frames/02_robot_task_0001_user_0001_scene_0001_cfg_0001_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sample_id": "03_human_task_0001_user_0001_scene_0002_cfg_0001_human",
+    "side": "human",
+    "episode": "task_0001_user_0001_scene_0002_cfg_0001_human",
+    "overlap_start": 1629519129055,
+    "overlap_end": 1629519138551,
+    "overlap_duration_ms": 9496,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629519129494,
+        "elapsed_ms": 439,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 12,
+            "timestamp": 1629519129464,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 18,
+            "timestamp": 1629519129494,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 12,
+            "timestamp": 1629519129480,
+            "delta_ms": -14,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 4,
+            "timestamp": 1629519129472,
+            "delta_ms": -22,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519130010,
+        "elapsed_ms": 955,
+        "max_abs_delta_ms": 24,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 18,
+            "timestamp": 1629519129999,
+            "delta_ms": -11,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 24,
+            "timestamp": 1629519130010,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 18,
+            "timestamp": 1629519129997,
+            "delta_ms": -13,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 10,
+            "timestamp": 1629519129986,
+            "delta_ms": -24,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519131120,
+        "elapsed_ms": 2065,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 31,
+            "timestamp": 1629519131150,
+            "delta_ms": 30,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 37,
+            "timestamp": 1629519131120,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 31,
+            "timestamp": 1629519131127,
+            "delta_ms": 7,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 23,
+            "timestamp": 1629519131100,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519132231,
+        "elapsed_ms": 3176,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 43,
+            "timestamp": 1629519132198,
+            "delta_ms": -33,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 50,
+            "timestamp": 1629519132231,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 44,
+            "timestamp": 1629519132245,
+            "delta_ms": 14,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 36,
+            "timestamp": 1629519132253,
+            "delta_ms": 22,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519133444,
+        "elapsed_ms": 4389,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 57,
+            "timestamp": 1629519133414,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 64,
+            "timestamp": 1629519133444,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 58,
+            "timestamp": 1629519133451,
+            "delta_ms": 7,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 48,
+            "timestamp": 1629519133418,
+            "delta_ms": -26,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519134739,
+        "elapsed_ms": 5684,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 72,
+            "timestamp": 1629519134709,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 79,
+            "timestamp": 1629519134739,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 73,
+            "timestamp": 1629519134756,
+            "delta_ms": 17,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 63,
+            "timestamp": 1629519134726,
+            "delta_ms": -13,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519135168,
+        "elapsed_ms": 6113,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 77,
+            "timestamp": 1629519135138,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 84,
+            "timestamp": 1629519135168,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 78,
+            "timestamp": 1629519135190,
+            "delta_ms": 22,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 68,
+            "timestamp": 1629519135161,
+            "delta_ms": -7,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519138017,
+        "elapsed_ms": 8962,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 109,
+            "timestamp": 1629519138019,
+            "delta_ms": 2,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 116,
+            "timestamp": 1629519138017,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 109,
+            "timestamp": 1629519137994,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 99,
+            "timestamp": 1629519137984,
+            "delta_ms": -33,
+            "ok": true,
+            "image": "frames/03_human_task_0001_user_0001_scene_0002_cfg_0001_human_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sample_id": "04_robot_task_0001_user_0001_scene_0002_cfg_0001",
+    "side": "robot",
+    "episode": "task_0001_user_0001_scene_0002_cfg_0001",
+    "overlap_start": 1629432745507,
+    "overlap_end": 1629432784502,
+    "overlap_duration_ms": 38995,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629432748774,
+        "elapsed_ms": 3267,
+        "max_abs_delta_ms": 22,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 44,
+            "timestamp": 1629432748781,
+            "delta_ms": 7,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 53,
+            "timestamp": 1629432748774,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 53,
+            "timestamp": 1629432748763,
+            "delta_ms": -11,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 23,
+            "timestamp": 1629432748752,
+            "delta_ms": -22,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432753476,
+        "elapsed_ms": 7969,
+        "max_abs_delta_ms": 29,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 88,
+            "timestamp": 1629432753447,
+            "delta_ms": -29,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 103,
+            "timestamp": 1629432753476,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 97,
+            "timestamp": 1629432753449,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 55,
+            "timestamp": 1629432753499,
+            "delta_ms": 23,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432758379,
+        "elapsed_ms": 12872,
+        "max_abs_delta_ms": 31,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 132,
+            "timestamp": 1629432758388,
+            "delta_ms": 9,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 153,
+            "timestamp": 1629432758379,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 146,
+            "timestamp": 1629432758348,
+            "delta_ms": -31,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 95,
+            "timestamp": 1629432758388,
+            "delta_ms": 9,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432763479,
+        "elapsed_ms": 17972,
+        "max_abs_delta_ms": 23,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 181,
+            "timestamp": 1629432763456,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 200,
+            "timestamp": 1629432763479,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 198,
+            "timestamp": 1629432763494,
+            "delta_ms": 15,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 142,
+            "timestamp": 1629432763496,
+            "delta_ms": 17,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432767754,
+        "elapsed_ms": 22247,
+        "max_abs_delta_ms": 18,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 220,
+            "timestamp": 1629432767743,
+            "delta_ms": -11,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 242,
+            "timestamp": 1629432767754,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 239,
+            "timestamp": 1629432767737,
+            "delta_ms": -17,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 184,
+            "timestamp": 1629432767736,
+            "delta_ms": -18,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432772214,
+        "elapsed_ms": 26707,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 263,
+            "timestamp": 1629432772247,
+            "delta_ms": 33,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 282,
+            "timestamp": 1629432772214,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 281,
+            "timestamp": 1629432772183,
+            "delta_ms": -31,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 226,
+            "timestamp": 1629432772209,
+            "delta_ms": -5,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432777720,
+        "elapsed_ms": 32213,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 316,
+            "timestamp": 1629432777723,
+            "delta_ms": 3,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 337,
+            "timestamp": 1629432777720,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 334,
+            "timestamp": 1629432777722,
+            "delta_ms": 2,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 272,
+            "timestamp": 1629432777753,
+            "delta_ms": 33,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432781909,
+        "elapsed_ms": 36402,
+        "max_abs_delta_ms": 29,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 357,
+            "timestamp": 1629432781933,
+            "delta_ms": 24,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 379,
+            "timestamp": 1629432781909,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 376,
+            "timestamp": 1629432781900,
+            "delta_ms": -9,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 311,
+            "timestamp": 1629432781880,
+            "delta_ms": -29,
+            "ok": true,
+            "image": "frames/04_robot_task_0001_user_0001_scene_0002_cfg_0001_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sample_id": "05_human_task_0001_user_0001_scene_0003_cfg_0001_human",
+    "side": "human",
+    "episode": "task_0001_user_0001_scene_0003_cfg_0001_human",
+    "overlap_start": 1629519168516,
+    "overlap_end": 1629519177464,
+    "overlap_duration_ms": 8948,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629519170294,
+        "elapsed_ms": 1778,
+        "max_abs_delta_ms": 25,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 27,
+            "timestamp": 1629519170319,
+            "delta_ms": 25,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 32,
+            "timestamp": 1629519170294,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 33,
+            "timestamp": 1629519170318,
+            "delta_ms": 24,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 18,
+            "timestamp": 1629519170308,
+            "delta_ms": 14,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519171051,
+        "elapsed_ms": 2535,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 35,
+            "timestamp": 1629519171050,
+            "delta_ms": -1,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 41,
+            "timestamp": 1629519171051,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 41,
+            "timestamp": 1629519171039,
+            "delta_ms": -12,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 26,
+            "timestamp": 1629519171021,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519172423,
+        "elapsed_ms": 3907,
+        "max_abs_delta_ms": 22,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 49,
+            "timestamp": 1629519172402,
+            "delta_ms": -21,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 56,
+            "timestamp": 1629519172423,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 56,
+            "timestamp": 1629519172426,
+            "delta_ms": 3,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 41,
+            "timestamp": 1629519172401,
+            "delta_ms": -22,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519173127,
+        "elapsed_ms": 4611,
+        "max_abs_delta_ms": 31,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 57,
+            "timestamp": 1629519173125,
+            "delta_ms": -2,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 64,
+            "timestamp": 1629519173127,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 64,
+            "timestamp": 1629519173140,
+            "delta_ms": 13,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 49,
+            "timestamp": 1629519173096,
+            "delta_ms": -31,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519174137,
+        "elapsed_ms": 5621,
+        "max_abs_delta_ms": 32,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 68,
+            "timestamp": 1629519174117,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 76,
+            "timestamp": 1629519174137,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 75,
+            "timestamp": 1629519174105,
+            "delta_ms": -32,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 61,
+            "timestamp": 1629519174124,
+            "delta_ms": -13,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519175081,
+        "elapsed_ms": 6565,
+        "max_abs_delta_ms": 27,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 79,
+            "timestamp": 1629519175104,
+            "delta_ms": 23,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 87,
+            "timestamp": 1629519175081,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 86,
+            "timestamp": 1629519175054,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 72,
+            "timestamp": 1629519175063,
+            "delta_ms": -18,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519176300,
+        "elapsed_ms": 7784,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 91,
+            "timestamp": 1629519176326,
+            "delta_ms": 26,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 99,
+            "timestamp": 1629519176300,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 98,
+            "timestamp": 1629519176267,
+            "delta_ms": -33,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 84,
+            "timestamp": 1629519176297,
+            "delta_ms": -3,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629519177395,
+        "elapsed_ms": 8879,
+        "max_abs_delta_ms": 23,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 102,
+            "timestamp": 1629519177372,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 111,
+            "timestamp": 1629519177395,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 110,
+            "timestamp": 1629519177372,
+            "delta_ms": -23,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 96,
+            "timestamp": 1629519177397,
+            "delta_ms": 2,
+            "ok": true,
+            "image": "frames/05_human_task_0001_user_0001_scene_0003_cfg_0001_human_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sample_id": "06_robot_task_0001_user_0001_scene_0003_cfg_0001",
+    "side": "robot",
+    "episode": "task_0001_user_0001_scene_0003_cfg_0001",
+    "overlap_start": 1629432880824,
+    "overlap_end": 1629432904635,
+    "overlap_duration_ms": 23811,
+    "cameras": [
+      "cam_035622060973",
+      "cam_038522062547",
+      "cam_038522063145",
+      "cam_039422060546"
+    ],
+    "rows": [
+      {
+        "target_timestamp": 1629432883941,
+        "elapsed_ms": 3117,
+        "max_abs_delta_ms": 32,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 46,
+            "timestamp": 1629432883921,
+            "delta_ms": -20,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 54,
+            "timestamp": 1629432883941,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 42,
+            "timestamp": 1629432883952,
+            "delta_ms": 11,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 28,
+            "timestamp": 1629432883973,
+            "delta_ms": 32,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t00_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432886295,
+        "elapsed_ms": 5471,
+        "max_abs_delta_ms": 33,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 70,
+            "timestamp": 1629432886277,
+            "delta_ms": -18,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 79,
+            "timestamp": 1629432886295,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 65,
+            "timestamp": 1629432886304,
+            "delta_ms": 9,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 52,
+            "timestamp": 1629432886262,
+            "delta_ms": -33,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t01_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432888936,
+        "elapsed_ms": 8112,
+        "max_abs_delta_ms": 32,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 95,
+            "timestamp": 1629432888910,
+            "delta_ms": -26,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 105,
+            "timestamp": 1629432888936,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 93,
+            "timestamp": 1629432888904,
+            "delta_ms": -32,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 76,
+            "timestamp": 1629432888923,
+            "delta_ms": -13,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t02_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432891535,
+        "elapsed_ms": 10711,
+        "max_abs_delta_ms": 27,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 120,
+            "timestamp": 1629432891508,
+            "delta_ms": -27,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 132,
+            "timestamp": 1629432891535,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 119,
+            "timestamp": 1629432891543,
+            "delta_ms": 8,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 100,
+            "timestamp": 1629432891540,
+            "delta_ms": 5,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t03_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432895065,
+        "elapsed_ms": 14241,
+        "max_abs_delta_ms": 14,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 156,
+            "timestamp": 1629432895068,
+            "delta_ms": 3,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 165,
+            "timestamp": 1629432895065,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 154,
+            "timestamp": 1629432895051,
+            "delta_ms": -14,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 122,
+            "timestamp": 1629432895059,
+            "delta_ms": -6,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t04_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432897551,
+        "elapsed_ms": 16727,
+        "max_abs_delta_ms": 18,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 181,
+            "timestamp": 1629432897533,
+            "delta_ms": -18,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 190,
+            "timestamp": 1629432897551,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 177,
+            "timestamp": 1629432897538,
+            "delta_ms": -13,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 148,
+            "timestamp": 1629432897566,
+            "delta_ms": 15,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t05_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432900650,
+        "elapsed_ms": 19826,
+        "max_abs_delta_ms": 32,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 211,
+            "timestamp": 1629432900662,
+            "delta_ms": 12,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 223,
+            "timestamp": 1629432900650,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 206,
+            "timestamp": 1629432900682,
+            "delta_ms": 32,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 174,
+            "timestamp": 1629432900681,
+            "delta_ms": 31,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t06_cam_039422060546.jpg"
+          }
+        ]
+      },
+      {
+        "target_timestamp": 1629432903420,
+        "elapsed_ms": 22596,
+        "max_abs_delta_ms": 30,
+        "cells": [
+          {
+            "camera": "cam_035622060973",
+            "frame_idx": 238,
+            "timestamp": 1629432903414,
+            "delta_ms": -6,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_035622060973.jpg"
+          },
+          {
+            "camera": "cam_038522062547",
+            "frame_idx": 252,
+            "timestamp": 1629432903420,
+            "delta_ms": 0,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_038522062547.jpg"
+          },
+          {
+            "camera": "cam_038522063145",
+            "frame_idx": 231,
+            "timestamp": 1629432903403,
+            "delta_ms": -17,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_038522063145.jpg"
+          },
+          {
+            "camera": "cam_039422060546",
+            "frame_idx": 180,
+            "timestamp": 1629432903390,
+            "delta_ms": -30,
+            "ok": true,
+            "image": "frames/06_robot_task_0001_user_0001_scene_0003_cfg_0001_t07_cam_039422060546.jpg"
+          }
+        ]
+      }
+    ]
+  }
+]

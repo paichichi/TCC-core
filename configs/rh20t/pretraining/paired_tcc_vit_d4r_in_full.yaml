@@ -11,23 +11,25 @@ checkpointing_frequency: 200
 
 data:
   root: /home/paichichi/data/RH20T/TCC_RH20T
-  batch_size: 2
+  batch_size: 4
   video_sampler_seed: 1
   pretrain_action_class: []
   max_vids_per_class: -1
   pretraining_video_sampler: paired
   paired_metadata_path: ""
-  paired_frame_sample_ratio: 0.5
-  paired_max_frames: -1
+  paired_fixed_frames: 16
+  paired_frame_sample_ratio: 1.0
+  paired_max_frames: 16
   paired_min_frames: 16
   paired_drop_short_pairs: true
+  paired_distinct_tasks_per_batch: true
   paired_role_order: [h, r]
 
 frame_sampler:
   image_ext: "*.jpg"
-  strategy: uniform
-  # Ignored by the paired sampler when paired_max_frames is -1.
-  num_frames_per_sequence: 40
+  strategy: boundary_stratified
+  use_start_frame: true
+  num_frames_per_sequence: 16
   num_context_frames: 1
   context_stride: 3
   all_sampler:
@@ -37,6 +39,8 @@ frame_sampler:
     offset: true
   uniform_sampler:
     offset: 0
+  boundary_stratified_sampler:
+    random_middle: true
   window_sampler: {}
 
 data_augmentation:
@@ -51,11 +55,14 @@ eval:
 model:
   model_type: vit_b16_linear
   embedding_size: 128
+  fusion_size: 768
+  vvcl_embedding_size: 128
   normalize_embeddings: false
   learnable_temp: false
   pretrain_path: /home/paichichi/data/pretrain/D4R_IN_1M.pth
   vit_weights: none
-  trainable_scope: all
+  vit_pooling: cls
+  trainable_scope: head
 
 loss:
   tcc:
@@ -69,6 +76,12 @@ loss:
     variance_lambda: 0.001
     huber_delta: 0.1
     similarity_type: l2
+  vvcl:
+    enabled: true
+    weight: 1.0
+    attention_pooling_heads: 1
+    logit_scale_init: 1.0
+    logit_bias_init: 0.0
 
 optim:
   train_max_iters: 4000

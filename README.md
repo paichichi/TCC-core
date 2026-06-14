@@ -51,8 +51,9 @@ For paired sampling, the number of frames per video is controlled by:
 ```yaml
 data:
   video_sampler_seed: 1
-  paired_frame_sample_ratio: 0.5
-  paired_max_frames: -1
+  paired_fixed_frames: -1
+  paired_frame_sample_ratio: 1.0
+  paired_max_frames: 40
   paired_min_frames: 16
 ```
 
@@ -60,15 +61,25 @@ data:
 reproduce the same random pair sequence, or change it to sample a different
 order.
 
-With `paired_max_frames: -1`, the sampled frame count is:
+With the default RH20T configs, the sampled frame count is:
+
+```text
+T = min(40, shortest_video_len_in_batch)
+```
+
+This avoids padding short videos while capping normal/long videos at 40 frames.
+Set `paired_fixed_frames` to a positive value, such as `40`, only when you want
+to force a fixed T; videos shorter than T are padded by repeating their final
+frame and clamping repeated `frame_idxs` to the true final frame.
+
+More generally, dynamic ratio-based sampling uses:
 
 ```text
 T = max(paired_min_frames, floor(shortest_video_len_in_batch * paired_frame_sample_ratio))
 ```
 
-and is finally clamped so it never exceeds the shortest video in that batch.
-Set `paired_max_frames` to a positive number, such as `40`, only when you want
-an explicit upper bound.
+In dynamic mode, `paired_max_frames` adds an explicit upper bound and T is
+finally clamped so it never exceeds the shortest video in that batch.
 
 ## Useful Commands
 
@@ -88,6 +99,37 @@ PYTHONPATH=/home/paichichi/projects/TCC-core \
 python pretrain.py \
   --experiment_name=debug_layernorm \
   --config_yaml=configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
+```
+
+Run on a specific GPU:
+
+```bash
+scripts/run_pretrain.sh \
+  0 \
+  ln_gpu0 \
+  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
+```
+
+Run with DDP on multiple GPUs:
+
+```bash
+scripts/run_pretrain.sh \
+  0,1,2,3 \
+  ln_ddp_4gpu \
+  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
+```
+
+Short loss-curve smoke test:
+
+```bash
+scripts/run_pretrain.sh \
+  0 \
+  ln_loss_debug \
+  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml \
+  --max_iters=100 \
+  --log_every=1 \
+  --eval_every=0 \
+  --checkpoint_every=0
 ```
 
 The current ViT configs use letterbox resize to fit native RH20T frames into a

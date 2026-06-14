@@ -1,0 +1,21 @@
+{
+  "threshold_ms": 33,
+  "min_views": 2,
+  "respect_start_frame": true,
+  "episodes_processed": 50,
+  "groups": 5849,
+  "by_role": {
+    "h": {
+      "episodes": 50,
+      "groups": 2910,
+      "view_refs": 14565,
+      "mean_views_per_group": 5.005154639175258
+    },
+    "r": {
+      "episodes": 50,
+      "groups": 2939,
+      "view_refs": 11254,
+      "mean_views_per_group": 3.8291936032664173
+    }
+  }
+}

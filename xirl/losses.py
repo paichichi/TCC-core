@@ -350,6 +350,187 @@ def pairwise_l2_sq(
   return torch.cdist(x1, x2).pow(2)
 
 
+def batched_pairwise_l2_sq(
+    x1,
+    x2,
+    normalize_dimension=False,
+):
+  """Compute batched pairwise squared Euclidean distances."""
+  distances = torch.cdist(x1, x2).pow(2)
+  if normalize_dimension:
+    distances = distances / x1.shape[-1]
+  return distances
+
+
+def soft_dtw_from_distance(
+    distances,
+    gamma,
+    normalize_time=True,
+):
+  """Differentiable Soft-DTW from a batched distance matrix.
+
+  Args:
+    distances: Tensor of shape [B, M, N].
+    gamma: Soft-min smoothing. Smaller values approach hard DTW.
+    normalize_time: Divide the final value by M + N.
+
+  Returns:
+    Tensor of shape [B] with one Soft-DTW value per distance matrix.
+  """
+  if distances.ndim != 3:
+    raise ValueError("Soft-DTW distance tensor must have shape [B, M, N].")
+  if gamma <= 0:
+    raise ValueError("Soft-DTW gamma must be positive.")
+
+  batch_size, num_x, num_y = distances.shape
+  inf = torch.full(
+      (batch_size,),
+      float("inf"),
+      device=distances.device,
+      dtype=distances.dtype,
+  )
+  zero = torch.zeros_like(inf)
+
+  previous = [zero] + [inf for _ in range(num_y)]
+  for i in range(1, num_x + 1):
+    current = [inf]
+    for j in range(1, num_y + 1):
+      candidates = torch.stack([
+          previous[j],
+          current[j - 1],
+          previous[j - 1],
+      ], dim=0)
+      soft_min = -gamma * torch.logsumexp(-candidates / gamma, dim=0)
+      current.append(distances[:, i - 1, j - 1] + soft_min)
+    previous = current
+
+  values = previous[num_y]
+  if normalize_time:
+    values = values / float(num_x + num_y)
+  return values
+
+
+def soft_dtw_sequence_distance(
+    seq_x,
+    seq_y,
+    gamma,
+    normalize_dimension=False,
+    divergence=True,
+    normalize_time=True,
+):
+  """Compute Soft-DTW or Soft-DTW divergence between sequence batches."""
+  if seq_x.ndim == 2:
+    seq_x = seq_x.unsqueeze(0)
+  if seq_y.ndim == 2:
+    seq_y = seq_y.unsqueeze(0)
+  if seq_x.ndim != 3 or seq_y.ndim != 3:
+    raise ValueError("Soft-DTW sequences must have shape [B, T, D].")
+  if seq_x.shape[0] != seq_y.shape[0]:
+    raise ValueError("Soft-DTW sequence batches must have the same size.")
+
+  dist_xy = batched_pairwise_l2_sq(seq_x, seq_y, normalize_dimension)
+  value_xy = soft_dtw_from_distance(dist_xy, gamma, normalize_time)
+  if not divergence:
+    return value_xy
+
+  dist_xx = batched_pairwise_l2_sq(seq_x, seq_x, normalize_dimension)
+  dist_yy = batched_pairwise_l2_sq(seq_y, seq_y, normalize_dimension)
+  value_xx = soft_dtw_from_distance(dist_xx, gamma, normalize_time)
+  value_yy = soft_dtw_from_distance(dist_yy, gamma, normalize_time)
+  return value_xy - 0.5 * (value_xx + value_yy)
+
+
+def compute_paired_soft_dtw_loss(
+    embs,
+    gamma=0.1,
+    temperature=0.1,
+    mode="contrastive",
+    normalize_dimension=False,
+    divergence=True,
+    normalize_time=True,
+):
+  """Soft-DTW auxiliary loss for adjacent paired batches.
+
+  The expected batch order is [a0, b0, a1, b1, ...]. The contrastive mode
+  forms a distance matrix between all a_i and b_j sequences and makes the
+  diagonal pair the target.
+  """
+  if mode not in ["paired", "contrastive", "paired_contrastive"]:
+    raise ValueError(f"Unsupported Soft-DTW mode: {mode}")
+  batch_size = embs.shape[0]
+  if batch_size < 2 or batch_size % 2:
+    raise ValueError("Paired Soft-DTW expects an even batch.")
+
+  first = embs[0::2]
+  second = embs[1::2]
+  losses = []
+
+  if mode in ["paired", "paired_contrastive"]:
+    paired_loss = soft_dtw_sequence_distance(
+        first,
+        second,
+        gamma,
+        normalize_dimension=normalize_dimension,
+        divergence=divergence,
+        normalize_time=normalize_time,
+    ).mean()
+    losses.append(paired_loss)
+
+  if mode in ["contrastive", "paired_contrastive"]:
+    num_pairs = first.shape[0]
+    first_grid = first[:, None].expand(num_pairs, num_pairs, *first.shape[1:])
+    second_grid = second[None].expand(num_pairs, num_pairs, *second.shape[1:])
+    first_flat = first_grid.reshape(num_pairs * num_pairs, *first.shape[1:])
+    second_flat = second_grid.reshape(num_pairs * num_pairs, *second.shape[1:])
+    distances = soft_dtw_sequence_distance(
+        first_flat,
+        second_flat,
+        gamma,
+        normalize_dimension=normalize_dimension,
+        divergence=divergence,
+        normalize_time=normalize_time,
+    ).reshape(num_pairs, num_pairs)
+
+    labels = torch.arange(num_pairs, device=embs.device)
+    logits = -distances / temperature
+    contrastive_loss = 0.5 * (
+        F.cross_entropy(logits, labels) +
+        F.cross_entropy(logits.t(), labels)
+    )
+    losses.append(contrastive_loss)
+
+  return torch.stack(losses).sum()
+
+
+def compute_paired_vvcl_siglip_loss(
+    video_embs,
+    logit_scale,
+    logit_bias,
+):
+  """Vid2Robot prompt-robot video contrastive loss with SigLIP objective.
+
+  The batch is expected to be ordered as [prompt0, robot0, prompt1, robot1, ...].
+  Diagonal prompt-robot pairs are positives (+1); off-diagonal pairs are
+  negatives (-1), matching the Vid2Robot VVCL definition.
+  """
+  batch_size = video_embs.shape[0]
+  if batch_size < 2 or batch_size % 2:
+    raise ValueError("VVCL expects an even batch with adjacent pairs.")
+
+  prompt_embs = video_embs[0::2]
+  robot_embs = video_embs[1::2]
+  num_pairs = prompt_embs.shape[0]
+  logits = logit_scale.exp() * torch.matmul(prompt_embs, robot_embs.t())
+  logits = logits + logit_bias
+
+  labels = -torch.ones_like(logits)
+  labels[
+      torch.arange(num_pairs, device=logits.device),
+      torch.arange(num_pairs, device=logits.device),
+  ] = 1.0
+  return F.softplus(-labels * logits).mean()
+
+
 def get_scaled_similarity(
     emb1,
     emb2,

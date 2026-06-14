@@ -1,0 +1,48 @@
+{
+  "thresholds_ms": [
+    16.0,
+    20.0,
+    33.0
+  ],
+  "num_episodes": 24844,
+  "by_side": {
+    "robot": {
+      "episodes": 13319,
+      "cameras": 111211,
+      "all_view_candidates": 7498605,
+      "pairwise_candidates": 196742113,
+      "all_view_le_16.0ms": 7491,
+      "all_view_le_20.0ms": 26941,
+      "all_view_le_33.0ms": 607107,
+      "pairwise_le_16.0ms": 67459661,
+      "pairwise_le_20.0ms": 83809296,
+      "pairwise_le_33.0ms": 133978315,
+      "all_view_ratio_le_16.0ms": 0.0009989858113609131,
+      "pairwise_ratio_le_16.0ms": 0.34288368652419626,
+      "all_view_ratio_le_20.0ms": 0.0035928015944298973,
+      "pairwise_ratio_le_20.0ms": 0.4259855438271114,
+      "all_view_ratio_le_33.0ms": 0.08096265905458415,
+      "pairwise_ratio_le_33.0ms": 0.6809844265523366,
+      "mean_cameras_per_episode": 8.349801036113822
+    },
+    "human": {
+      "episodes": 11525,
+      "cameras": 91300,
+      "all_view_candidates": 1356795,
+      "pairwise_candidates": 35090224,
+      "all_view_le_16.0ms": 4952,
+      "all_view_le_20.0ms": 18791,
+      "all_view_le_33.0ms": 351653,
+      "pairwise_le_16.0ms": 13527631,
+      "pairwise_le_20.0ms": 16738289,
+      "pairwise_le_33.0ms": 26846505,
+      "all_view_ratio_le_16.0ms": 0.0036497776008903335,
+      "pairwise_ratio_le_16.0ms": 0.3855099642567115,
+      "all_view_ratio_le_20.0ms": 0.013849549858305787,
+      "pairwise_ratio_le_20.0ms": 0.4770071858190475,
+      "all_view_ratio_le_33.0ms": 0.25917916855530865,
+      "pairwise_ratio_le_33.0ms": 0.7650707786875341,
+      "mean_cameras_per_episode": 7.921908893709327
+    }
+  }
+}

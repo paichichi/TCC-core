@@ -12,15 +12,18 @@ def get_config():
   config.data.root = "/home/paichichi/data/RH20T/TCC_RH20T"
   config.data.batch_size = 2
   config.data.pretraining_video_sampler = "paired"
-  config.data.paired_frame_sample_ratio = 0.5
-  config.data.paired_max_frames = -1
+  config.data.paired_fixed_frames = 16
+  config.data.paired_frame_sample_ratio = 1.0
+  config.data.paired_max_frames = 16
   config.data.paired_min_frames = 16
   config.data.paired_drop_short_pairs = True
   config.data.paired_role_order = ("h", "r")
+  config.data.paired_distinct_tasks_per_batch = True
 
   config.frame_sampler.image_ext = "*.jpg"
-  config.frame_sampler.strategy = "uniform"
-  config.frame_sampler.num_frames_per_sequence = 40
+  config.frame_sampler.strategy = "boundary_stratified"
+  config.frame_sampler.use_start_frame = True
+  config.frame_sampler.num_frames_per_sequence = 16
   config.frame_sampler.num_context_frames = 1
 
   config.data_augmentation.image_size = (224, 224)
@@ -29,13 +32,18 @@ def get_config():
 
   config.model.model_type = "vit_b16_linear"
   config.model.embedding_size = 128
+  config.model.fusion_size = 768
+  config.model.vvcl_embedding_size = 128
   config.model.pretrain_path = ""
   config.model.vit_weights = "imagenet"
-  config.model.trainable_scope = "layernorm_head"
+  config.model.vit_pooling = "cls"
+  config.model.trainable_scope = "head"
 
   config.algorithm = "tcc"
   config.loss.tcc.paired_matching = True
   config.loss.tcc.stochastic_matching = False
   config.loss.tcc.loss_type = "regression_mse"
+  config.loss.vvcl.enabled = True
+  config.loss.vvcl.weight = 1.0
 
   return config

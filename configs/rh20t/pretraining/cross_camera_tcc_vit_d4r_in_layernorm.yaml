@@ -1,0 +1,99 @@
+# RH20T cross-camera TCC with D4R-IN ViT-B/16.
+# Batch order is [view_a_0, view_b_0, view_a_1, view_b_1, ...].
+
+root_dir: /tmp/tcc-core/rh20t_cross_camera_tcc_vit_d4r_in_layernorm
+seed: 1
+cudnn_deterministic: false
+cudnn_benchmark: true
+algorithm: tcc
+logging_frequency: 100
+checkpointing_frequency: 200
+
+data:
+  root: /home/paichichi/data/RH20T/TCC_RH20T
+  batch_size: 8
+  video_sampler_seed: 1
+  pretrain_action_class: []
+  max_vids_per_class: -1
+  pretraining_video_sampler: cross_camera_paired
+  paired_metadata_path: ""
+  paired_fixed_frames: 16
+  paired_frame_sample_ratio: 1.0
+  paired_max_frames: 16
+  paired_min_frames: 16
+  paired_drop_short_pairs: true
+  paired_distinct_tasks_per_batch: true
+  cross_camera_roles: [h, r]
+  cross_camera_pair_role_order: [h, r]
+  cross_camera_distinct_episodes: false
+
+frame_sampler:
+  image_ext: "*.jpg"
+  strategy: boundary_stratified
+  use_start_frame: true
+  num_frames_per_sequence: 16
+  num_context_frames: 1
+  context_stride: 3
+  all_sampler:
+    stride: 1
+  strided_sampler:
+    stride: 3
+    offset: true
+  uniform_sampler:
+    offset: 0
+  boundary_stratified_sampler:
+    random_middle: true
+  window_sampler: {}
+
+data_augmentation:
+  image_size: [224, 224]
+  train_transforms: [letterbox_resize, normalize]
+  eval_transforms: [letterbox_resize, normalize]
+
+eval:
+  val_iters: 20
+  eval_frequency: 500
+
+model:
+  model_type: vit_b16_linear
+  embedding_size: 128
+  fusion_size: 768
+  vvcl_embedding_size: 128
+  normalize_embeddings: true
+  learnable_temp: false
+  pretrain_path: /home/paichichi/data/pretrain/D4R_IN_1M.pth
+  vit_weights: none
+  vit_pooling: patch_mean
+  trainable_scope: head
+
+loss:
+  tcc:
+    stochastic_matching: false
+    paired_matching: true
+    loss_type: regression_mse
+    cycle_length: 2
+    label_smoothing: 0.1
+    softmax_temperature: 0.05
+    normalize_indices: true
+    variance_lambda: 0.001
+    huber_delta: 0.1
+    similarity_type: l2
+  soft_dtw:
+    enabled: false
+    weight: 0.1
+    mode: contrastive
+    gamma: 0.1
+    temperature: 0.1
+    divergence: true
+    normalize_time: true
+  vvcl:
+    enabled: true
+    weight: 1.0
+    attention_pooling_heads: 1
+    logit_scale_init: 1.0
+    logit_bias_init: 0.0
+
+optim:
+  train_max_iters: 10000
+  weight_decay: 0
+  lr: 0.00005

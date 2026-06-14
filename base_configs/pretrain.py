@@ -70,12 +70,27 @@ def get_config():
   config.data.paired_metadata_path = ""
   # Batch-level dynamic frame count for paired sampling:
   # T = max(min_frames, floor(batch_min_len * ratio)).
+  # Set paired_fixed_frames > 0 to use a fixed T and pad short videos by
+  # repeating their last frame.
   # Set paired_max_frames > 0 to add an explicit upper bound.
+  config.data.paired_fixed_frames = -1
   config.data.paired_frame_sample_ratio = 0.5
   config.data.paired_max_frames = -1
   config.data.paired_min_frames = 16
   config.data.paired_drop_short_pairs = True
   config.data.paired_role_order = ("h", "r")
+  config.data.paired_distinct_tasks_per_batch = False
+  # For cross-camera paired TCC, empty cross_camera_pair_role_order samples
+  # same-role pairs. Set it to ("h", "r") for human-robot cross-camera pairs.
+  config.data.cross_camera_roles = ("h", "r")
+  config.data.cross_camera_pair_role_order = ()
+  config.data.cross_camera_distinct_episodes = True
+  # For task-level role/camera pairing, pairs are sampled online from rows that
+  # share these metadata keys. The default only requires the same task.
+  config.data.task_role_camera_group_keys = ("task_id",)
+  config.data.task_role_camera_pair_role_order = ("h", "r")
+  config.data.task_role_camera_different_camera = True
+  config.data.task_role_camera_different_episode = False
 
   # ============================================== #
   # Frame sampling params.
@@ -87,6 +102,9 @@ def get_config():
   config.frame_sampler.image_ext = "*.png"
   # This controls the type of sampling we perform on video frames.
   config.frame_sampler.strategy = "uniform"
+  # If true, read start_frame from metadata and sample from [start_frame, final].
+  config.frame_sampler.use_start_frame = False
+  config.frame_sampler.start_frame_metadata_path = ""
   # The number of frames to sample per video.
   config.frame_sampler.num_frames_per_sequence = 15
   # The number of context frames to sample per frame. This is useful for
@@ -104,6 +122,10 @@ def get_config():
 
   config.frame_sampler.uniform_sampler = ml_collections.ConfigDict()
   config.frame_sampler.uniform_sampler.offset = 0
+
+  config.frame_sampler.boundary_stratified_sampler = ml_collections.ConfigDict()
+  config.frame_sampler.boundary_stratified_sampler.random_middle = True
+  config.frame_sampler.boundary_stratified_sampler.middle_strategy = "stratified"
 
   # Currently, this frame sampler has no additional kwargs.
   config.frame_sampler.window_sampler = ml_collections.ConfigDict()
@@ -149,10 +171,13 @@ def get_config():
 
   config.model.model_type = "resnet18_linear"
   config.model.embedding_size = 32
+  config.model.fusion_size = 768
+  config.model.vvcl_embedding_size = 128
   config.model.normalize_embeddings = False
   config.model.learnable_temp = False
   config.model.pretrain_path = ""
   config.model.vit_weights = "imagenet"
+  config.model.vit_pooling = "cls"
   config.model.trainable_scope = "all"
 
   # ============================================== #
@@ -162,6 +187,7 @@ def get_config():
 
   ## TCC loss.
   config.loss.tcc = ml_collections.ConfigDict()
+  config.loss.tcc.enabled = True
   config.loss.tcc.stochastic_matching = False
   # If True, only adjacent batch items are aligned:
   # [a0, b0, a1, b1, ...] -> a_i <-> b_i.
@@ -174,6 +200,27 @@ def get_config():
   config.loss.tcc.variance_lambda = 0.001
   config.loss.tcc.huber_delta = 0.1
   config.loss.tcc.similarity_type = "l2"  # cosine
+
+  ## Soft-DTW auxiliary loss.
+  config.loss.soft_dtw = ml_collections.ConfigDict()
+  config.loss.soft_dtw.enabled = False
+  config.loss.soft_dtw.weight = 0.1
+  # "paired": only positive adjacent pairs.
+  # "contrastive": batch-level human/robot distance matrix with CE labels.
+  # "paired_contrastive": sum of both terms.
+  config.loss.soft_dtw.mode = "contrastive"
+  config.loss.soft_dtw.gamma = 0.1
+  config.loss.soft_dtw.temperature = 0.1
+  config.loss.soft_dtw.divergence = True
+  config.loss.soft_dtw.normalize_time = True
+
+  ## Vid2Robot prompt-robot video contrastive loss.
+  config.loss.vvcl = ml_collections.ConfigDict()
+  config.loss.vvcl.enabled = False
+  config.loss.vvcl.weight = 1.0
+  config.loss.vvcl.attention_pooling_heads = 1
+  config.loss.vvcl.logit_scale_init = 1.0
+  config.loss.vvcl.logit_bias_init = 0.0
 
   # ============================================== #
   # Optimizer params

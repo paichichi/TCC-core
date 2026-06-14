@@ -78,15 +78,19 @@ FRAME_SAMPLERS = {
     "uniform": frame_samplers.UniformSampler,
     "uniform_with_positives": frame_samplers.UniformWithPositivesSampler,
     "last_and_randoms": frame_samplers.LastFrameAndRandomFrames,
+    "boundary_stratified": frame_samplers.BoundaryStratifiedSampler,
     "window": frame_samplers.WindowSampler,
 }
 VIDEO_SAMPLERS = {
+    "cross_camera_paired": video_samplers.CrossCameraPairedBatchSampler,
     "random": video_samplers.RandomBatchSampler,
     "paired": video_samplers.PairedBatchSampler,
     "same_class": video_samplers.SameClassBatchSampler,
+    "task_role_camera": video_samplers.TaskRoleCameraBatchSampler,
 }
 MODELS = {
     "resnet18_linear": models.Resnet18LinearEncoderNet,
+    "resnet50_r3m_linear": models.Resnet50R3MLinearEncoderNet,
     "vit_b16_linear": models.ViTB16LinearEncoderNet,
 }
 TRAINERS = {
@@ -105,13 +109,43 @@ def model_from_config(config):
       "normalize_embeddings": config.model.normalize_embeddings,
       "learnable_temp": config.model.learnable_temp,
   }
-  if config.model.model_type in ["resnet18_linear", "vit_b16_linear"]:
+  if config.model.model_type in [
+      "resnet18_linear",
+      "resnet50_r3m_linear",
+      "vit_b16_linear",
+  ]:
     kwargs["embedding_size"] = config.model.embedding_size
+  if config.model.model_type == "resnet50_r3m_linear":
+    kwargs["pretrain_path"] = config.model.pretrain_path
+    kwargs["trainable_scope"] = config.model.trainable_scope
   if config.model.model_type == "vit_b16_linear":
+    kwargs["fusion_size"] = config.model.fusion_size
+    kwargs["vvcl_embedding_size"] = config.model.vvcl_embedding_size
     kwargs["pretrain_path"] = config.model.pretrain_path
     kwargs["vit_weights"] = config.model.vit_weights
+    kwargs["vit_pooling"] = config.model.vit_pooling
     kwargs["trainable_scope"] = config.model.trainable_scope
-  return MODELS[config.model.model_type](**kwargs)
+  model = MODELS[config.model.model_type](**kwargs)
+  if getattr(config.loss.vvcl, "enabled", False):
+    model.init_video_contrastive_head(
+        embedding_size=config.model.vvcl_embedding_size,
+        num_heads=config.loss.vvcl.attention_pooling_heads,
+        logit_scale_init=config.loss.vvcl.logit_scale_init,
+        logit_bias_init=config.loss.vvcl.logit_bias_init,
+    )
+  _freeze_disabled_projection_heads(model, config)
+  return model
+
+
+def _freeze_disabled_projection_heads(model, config):
+  """Do not optimize projection heads whose losses are disabled."""
+  if not getattr(config.loss.tcc, "enabled", True) and hasattr(model, "encoder"):
+    for param in model.encoder.parameters():
+      param.requires_grad = False
+  if (not getattr(config.loss.vvcl, "enabled", False) and
+      hasattr(model, "vvcl_encoder")):
+    for param in model.vvcl_encoder.parameters():
+      param.requires_grad = False
 
 
 def optim_from_config(config, model):
@@ -142,12 +176,20 @@ def create_transform(name, *args, **kwargs):
 
 def frame_sampler_from_config(config):
   """Create a frame sampler from a config."""
+  metadata_path = ""
+  if getattr(config.frame_sampler, "use_start_frame", False):
+    metadata_path = getattr(config.frame_sampler, "start_frame_metadata_path", "")
+    if not metadata_path:
+      metadata_path = osp.join(config.data.root, "manifest.csv")
+
   kwargs = {
       "num_frames": config.frame_sampler.num_frames_per_sequence,
       "num_ctx_frames": config.frame_sampler.num_context_frames,
       "ctx_stride": config.frame_sampler.context_stride,
       "pattern": config.frame_sampler.image_ext,
       "seed": config.seed,
+      "start_frame_metadata_path": metadata_path,
+      "use_start_frame": getattr(config.frame_sampler, "use_start_frame", False),
   }
 
   if config.frame_sampler.strategy == "strided":
@@ -155,6 +197,14 @@ def frame_sampler_from_config(config):
     kwargs["offset"] = config.frame_sampler.strided_sampler.offset
   elif config.frame_sampler.strategy == "uniform":
     kwargs["offset"] = config.frame_sampler.uniform_sampler.offset
+  elif config.frame_sampler.strategy == "boundary_stratified":
+    kwargs["random_middle"] = (
+        config.frame_sampler.boundary_stratified_sampler.random_middle)
+    kwargs["middle_strategy"] = getattr(
+        config.frame_sampler.boundary_stratified_sampler,
+        "middle_strategy",
+        "stratified",
+    )
 
   return FRAME_SAMPLERS[config.frame_sampler.strategy](**kwargs)
 
@@ -174,7 +224,11 @@ def video_sampler_from_config(
           config.seed if config.data.video_sampler_seed is None
           else config.data.video_sampler_seed),
   }
-  if config.data.pretraining_video_sampler == "paired":
+  if config.data.pretraining_video_sampler in [
+      "paired",
+      "cross_camera_paired",
+      "task_role_camera",
+  ]:
     metadata_path = config.data.paired_metadata_path
     if not metadata_path:
       metadata_path = osp.join(dataset_path, "metadata.csv")
@@ -182,12 +236,25 @@ def video_sampler_from_config(
         metadata_path = osp.join(osp.dirname(dataset_path), "manifest.csv")
     kwargs.update({
         "metadata_path": metadata_path,
+        "fixed_frames": config.data.paired_fixed_frames,
         "sample_ratio": config.data.paired_frame_sample_ratio,
         "max_frames": config.data.paired_max_frames,
         "min_frames": config.data.paired_min_frames,
         "drop_short_pairs": config.data.paired_drop_short_pairs,
-        "role_order": config.data.paired_role_order,
+        "distinct_tasks_per_batch": config.data.paired_distinct_tasks_per_batch,
     })
+    if config.data.pretraining_video_sampler == "paired":
+      kwargs["role_order"] = config.data.paired_role_order
+    elif config.data.pretraining_video_sampler == "cross_camera_paired":
+      kwargs["roles"] = config.data.cross_camera_roles
+      kwargs["pair_role_order"] = config.data.cross_camera_pair_role_order
+      kwargs["distinct_episodes"] = config.data.cross_camera_distinct_episodes
+    else:
+      kwargs["group_keys"] = config.data.task_role_camera_group_keys
+      kwargs["pair_role_order"] = config.data.task_role_camera_pair_role_order
+      kwargs["different_camera"] = config.data.task_role_camera_different_camera
+      kwargs["different_episode"] = (
+          config.data.task_role_camera_different_episode)
   return VIDEO_SAMPLERS[config.data.pretraining_video_sampler](**kwargs)
 
 
