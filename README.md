@@ -1,156 +1,102 @@
 # TCC-core
 
-TCC-core is a trimmed Temporal Cycle Consistency pretraining codebase for
-fine-tuning visual backbones on RH20T-style paired videos.
+Minimal RH20T multi-view pretraining code.
 
-This repository keeps the pieces we need for backbone pretraining:
+The current training path is no longer vanilla TCC. It uses:
 
-- TCC losses in `xirl/losses.py`
-- video dataset loading and frame sampling in `xirl/dataset.py`,
-  `xirl/frame_samplers.py`, and `xirl/video_samplers.py`
-- TCC training logic in `xirl/trainers/tcc.py`
-- ResNet18 and ViT-B/16 backbone wrappers in `xirl/models.py`
-- RH20T paired configs in `configs/rh20t/pretraining/`
+- same-side timestamp-aligned multi-view fusion
+- H/R matched camera combos
+- contrastive Soft-DTW over human/robot fused sequences
+- auxiliary multi-view VVCL over disjoint view subsets
 
-The original XIRL reward, downstream evaluation, imitation learning,
-X-MAGICAL launchers, and SAC policy-training code have been removed.
+## Data
 
-## Dataset Shape
-
-The paired RH20T sampler expects a root like:
+Expected data root:
 
 ```text
 /home/paichichi/data/RH20T/TCC_RH20T/
   train/
-    task_0001/
-      000000/
-        000000.jpg
-        ...
-      000001/
-        000000.jpg
-        ...
   manifest.csv
+  lookup.csv
+  tcn_timestamp_groups.csv
+  training_index.pt
 ```
 
-The `manifest.csv` must include:
+`training_index.pt` is a local dataset index. It is not committed to GitHub.
+Rebuild it from `tcn_timestamp_groups.csv` with:
+
+```bash
+python scripts/build_universal_matched_group_index.py
+```
+
+## Train
+
+Default training arguments already match the current main experiment:
 
 ```text
-sequence_id,paired_sequence_id,episode_id,task_id,role,num_frames,embodiment_id,camera_id
+8 timestamps
+4 views
+H/R exact matched camera combo
+unique-task batches when possible
+full 4-view fusion for Soft-DTW
+2-view vs 2-view disjoint subsets for MV-VVCL
 ```
 
-For paired TCC, a batch is ordered as:
+Minimal debug run:
+
+```bash
+conda run --no-capture-output -n tcc-core \
+  python -u scripts/train_multiview_softdtw.py \
+  --config configs/debug_4080s.json
+```
+
+Config values can be overridden from the command line:
+
+```bash
+conda run --no-capture-output -n tcc-core \
+  python -u scripts/train_multiview_softdtw.py \
+  --config configs/debug_4080s.json \
+  --out-dir /tmp/tcc-core/multiview_softdtw_runs/smoke \
+  --max-iters 1
+```
+
+Useful overrides:
+
+```bash
+--batch-pairs 4
+--training-index /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
+--data-root /home/paichichi/data/RH20T/TCC_RH20T
+--num-timestamps 8
+--max-views-per-group 4
+--lambda-mv 0.5
+--temperature 0.1
+--gamma 0.1
+--device cuda:0
+```
+
+The default matched index path is:
 
 ```text
-[h0, r0, h1, r1, ...]
+/home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
 ```
 
-and TCC is computed only inside each adjacent human-robot pair.
+## Review Export
 
-For paired sampling, the number of frames per video is controlled by:
+Export copied-frame folders for visual inspection:
 
-```yaml
-data:
-  video_sampler_seed: 1
-  paired_fixed_frames: -1
-  paired_frame_sample_ratio: 1.0
-  paired_max_frames: 40
-  paired_min_frames: 16
+```bash
+python scripts/export_matched_combo_review_folders.py
 ```
 
-`video_sampler_seed` controls the shuffled pair order. Use the same value to
-reproduce the same random pair sequence, or change it to sample a different
-order.
-
-With the default RH20T configs, the sampled frame count is:
+## Core Files
 
 ```text
-T = min(40, shortest_video_len_in_batch)
+scripts/train_multiview_softdtw.py
+configs/debug_4080s.json
+configs/train_2a100.json
+scripts/build_tcn_timestamp_group_index.py
+scripts/build_universal_matched_group_index.py
+scripts/export_matched_combo_review_folders.py
+xirl/losses.py
+xirl/models.py
 ```
-
-This avoids padding short videos while capping normal/long videos at 40 frames.
-Set `paired_fixed_frames` to a positive value, such as `40`, only when you want
-to force a fixed T; videos shorter than T are padded by repeating their final
-frame and clamping repeated `frame_idxs` to the true final frame.
-
-More generally, dynamic ratio-based sampling uses:
-
-```text
-T = max(paired_min_frames, floor(shortest_video_len_in_batch * paired_frame_sample_ratio))
-```
-
-In dynamic mode, `paired_max_frames` adds an explicit upper bound and T is
-finally clamped so it never exceeds the shortest video in that batch.
-
-## Useful Commands
-
-Debug one batch:
-
-```bash
-PYTHONPATH=/home/paichichi/projects/TCC-core \
-python debug_dataset.py \
-  --config=configs/rh20t/pretraining/paired_tcc_vit_d4r_in.py \
-  --debug
-```
-
-Start D4R ViT paired TCC pretraining:
-
-```bash
-PYTHONPATH=/home/paichichi/projects/TCC-core \
-python pretrain.py \
-  --experiment_name=debug_layernorm \
-  --config_yaml=configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
-```
-
-Run on a specific GPU:
-
-```bash
-scripts/run_pretrain.sh \
-  0 \
-  ln_gpu0 \
-  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
-```
-
-Run with DDP on multiple GPUs:
-
-```bash
-scripts/run_pretrain.sh \
-  0,1,2,3 \
-  ln_ddp_4gpu \
-  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml
-```
-
-Short loss-curve smoke test:
-
-```bash
-scripts/run_pretrain.sh \
-  0 \
-  ln_loss_debug \
-  configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml \
-  --max_iters=100 \
-  --log_every=1 \
-  --eval_every=0 \
-  --checkpoint_every=0
-```
-
-The current ViT configs use letterbox resize to fit native RH20T frames into a
-224x224 ViT-B/16 input while preserving aspect ratio.
-
-## Fine-Tuning Scope
-
-ViT fine-tuning is controlled by one config value:
-
-```yaml
-model:
-  trainable_scope: layernorm_head
-```
-
-Supported values:
-
-- `layernorm_head`: train ViT LayerNorm gamma/beta plus the TCC linear head.
-- `all`: train the full ViT backbone plus the TCC linear head.
-- `head`: train only the TCC linear head.
-
-Two D4R-IN YAML templates are provided:
-
-- `configs/rh20t/pretraining/paired_tcc_vit_d4r_in_layernorm.yaml`
-- `configs/rh20t/pretraining/paired_tcc_vit_d4r_in_full.yaml`

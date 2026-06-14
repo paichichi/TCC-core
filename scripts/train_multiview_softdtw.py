@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import json
 import random
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from xirl.losses import soft_dtw_sequence_distance  # pylint: disable=wrong-import-position
 from xirl.models import ViTB16Backbone  # pylint: disable=wrong-import-position
+
+
+PATH_ARG_NAMES = {
+    "data_root",
+    "timestamp_groups",
+    "training_index",
+    "out_dir",
+    "pretrain_path",
+}
 
 
 @dataclass
@@ -135,24 +145,53 @@ class FixedSlotFusionSoftDTW(nn.Module):
     )
 
 
-def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser()
+def load_config(path: Path) -> dict:
+  with path.open("r", encoding="utf-8") as f:
+    return json.load(f)
+
+
+def normalize_config_keys(config: dict) -> dict:
+  return {key.replace("-", "_"): value for key, value in config.items()}
+
+
+def coerce_path_args(args: argparse.Namespace) -> argparse.Namespace:
+  for name in PATH_ARG_NAMES:
+    value = getattr(args, name)
+    if value is not None and not isinstance(value, Path):
+      setattr(args, name, Path(value))
+  return args
+
+
+def build_parser(parents=None) -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(parents=parents or [])
   parser.add_argument(
+      "--data-root",
       "--tcc-root",
+      dest="data_root",
       type=Path,
       default=Path("/home/paichichi/data/RH20T/TCC_RH20T"),
   )
   parser.add_argument(
+      "--timestamp-groups",
       "--index",
+      dest="timestamp_groups",
       type=Path,
       default=Path("/home/paichichi/data/RH20T/TCC_RH20T/tcn_timestamp_groups.csv"),
+  )
+  parser.add_argument(
+      "--training-index",
+      "--matched-index",
+      dest="training_index",
+      type=Path,
+      default=Path("/home/paichichi/data/RH20T/TCC_RH20T/training_index.pt"),
+      help="Universal matched-camera training index.",
   )
   parser.add_argument(
       "--out-dir",
       type=Path,
       default=Path("/tmp/tcc-core/multiview_softdtw_runs/smoke"),
   )
-  parser.add_argument("--num-timestamps", type=int, default=12)
+  parser.add_argument("--num-timestamps", type=int, default=8)
   parser.add_argument("--batch-pairs", type=int, default=4)
   parser.add_argument(
       "--max-groups",
@@ -171,15 +210,36 @@ def parse_args() -> argparse.Namespace:
       choices=["contrastive_softdtw_mv", "paired_softdtw_hr_vvcl"],
       default="contrastive_softdtw_mv",
   )
-  parser.add_argument("--lambda-mv", type=float, default=0.0)
+  parser.add_argument("--lambda-mv", type=float, default=0.5)
   parser.add_argument("--lambda-hr-vvcl", type=float, default=0.5)
   parser.add_argument("--mv-temperature", type=float, default=0.1)
   parser.add_argument("--max-views-per-group", type=int, default=4)
-  parser.add_argument("--min-views-per-group", type=int, default=2)
+  parser.add_argument("--min-views-per-group", type=int, default=4)
   parser.add_argument("--view-keep-ratio", type=float, default=0.75)
-  parser.add_argument("--disjoint-view-subsets", action="store_true")
-  parser.add_argument("--softdtw-full-views", action="store_true")
-  parser.add_argument("--unique-task-batch", action="store_true")
+  parser.add_argument(
+      "--disjoint-view-subsets",
+      action=argparse.BooleanOptionalAction,
+      default=True,
+  )
+  parser.add_argument(
+      "--softdtw-full-views",
+      action=argparse.BooleanOptionalAction,
+      default=True,
+  )
+  parser.add_argument(
+      "--unique-task-batch",
+      action=argparse.BooleanOptionalAction,
+      default=True,
+  )
+  parser.add_argument(
+      "--matched-camera-combo",
+      action=argparse.BooleanOptionalAction,
+      default=True,
+      help=(
+          "Require H/R to sample the same valid camera combo inside each "
+          "paired episode. The combo size is --max-views-per-group."
+      ),
+  )
   parser.add_argument("--lr", type=float, default=5e-5)
   parser.add_argument("--weight-decay", type=float, default=0.0)
   parser.add_argument("--seed", type=int, default=1)
@@ -193,7 +253,31 @@ def parse_args() -> argparse.Namespace:
       default="/home/paichichi/data/pretrain/D4R_IN_1M.pth",
   )
   parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
-  return parser.parse_args()
+  return parser
+
+
+def parse_args() -> argparse.Namespace:
+  config_parser = argparse.ArgumentParser(add_help=False)
+  config_parser.add_argument(
+      "--config",
+      type=Path,
+      help="JSON config file. CLI arguments override config values.",
+  )
+  config_args, _ = config_parser.parse_known_args()
+  parser = build_parser(parents=[config_parser])
+
+  if config_args.config is not None:
+    config = normalize_config_keys(load_config(config_args.config))
+    valid_keys = {
+        action.dest for action in parser._actions  # pylint: disable=protected-access
+    }
+    unknown = sorted(set(config) - valid_keys)
+    if unknown:
+      raise ValueError(
+          f"Unknown config keys in {config_args.config}: {unknown}")
+    parser.set_defaults(**config)
+
+  return coerce_path_args(parser.parse_args())
 
 
 def normalize_max_groups(max_groups: int) -> int | None:
@@ -205,6 +289,8 @@ def load_tracks(
     min_groups: int,
     min_views_per_group: int,
     max_groups: int | None,
+    matched_camera_combo: bool,
+    combo_size: int,
 ) -> dict[str, dict[str, list[Group]]]:
   tracks: dict[tuple[str, str], list[Group]] = defaultdict(list)
   loaded = 0
@@ -234,9 +320,256 @@ def load_tracks(
   for episode_id in episode_ids:
     h = sorted(tracks.get((episode_id, "h"), []), key=lambda g: g.timestamp_ms)
     r = sorted(tracks.get((episode_id, "r"), []), key=lambda g: g.timestamp_ms)
-    if len(h) >= min_groups and len(r) >= min_groups:
+    if len(h) < min_groups or len(r) < min_groups:
+      continue
+    if matched_camera_combo:
+      shared_combos = find_shared_valid_camera_combos(
+          h, r, combo_size=combo_size, min_groups=min_groups)
+      if not shared_combos:
+        continue
+      paired[episode_id] = {
+          "h": h,
+          "r": r,
+          "shared_combos": shared_combos,
+      }
+    else:
       paired[episode_id] = {"h": h, "r": r}
   return paired
+
+
+def load_matched_training_index(
+    index_path: Path,
+    min_groups: int,
+    combo_size: int,
+) -> dict[str, dict[str, list[Group]]]:
+  payload = torch.load(index_path, map_location="cpu", weights_only=False)
+  if payload.get("format") not in {
+      "matched_combo_training_index_v1",
+      "matched_combo_training_index_v2",
+      "matched_combo_universal_group_pool_v1",
+  }:
+    raise ValueError(f"Unsupported matched index format: {payload.get('format')}")
+  if payload["format"] != "matched_combo_universal_group_pool_v1" and int(payload["num_timestamps"]) < min_groups:
+    raise ValueError(
+        f"Matched index only supports {payload['num_timestamps']} timestamps, "
+        f"but {min_groups} were requested.")
+  if payload["format"] != "matched_combo_universal_group_pool_v1" and int(payload["num_views"]) != combo_size:
+    raise ValueError(
+        f"Matched index has {payload['num_views']} views, "
+        f"but --max-views-per-group={combo_size}.")
+
+  paired = {}
+  for episode_id, rec in payload["episodes"].items():
+    if payload["format"] == "matched_combo_universal_group_pool_v1":
+      shared_combos = find_shared_valid_pool_combos(
+          rec["h_group_pool"],
+          rec["r_group_pool"],
+          combo_size=combo_size,
+          min_groups=min_groups,
+      )
+      if shared_combos:
+        paired[episode_id] = {
+            "task_id": rec["task_id"],
+            "h_group_pool": rec["h_group_pool"],
+            "r_group_pool": rec["r_group_pool"],
+            "shared_combos": shared_combos,
+            "lazy_matched_index": True,
+        }
+      continue
+
+    if payload["format"] == "matched_combo_training_index_v2":
+      shared_combos = [
+          {
+              "camera_ids": tuple(
+                  int(camera_id) for camera_id in combo_rec["camera_ids"]),
+              "h_group_indices": combo_rec["h_group_indices"],
+              "r_group_indices": combo_rec["r_group_indices"],
+          }
+          for combo_rec in rec["shared_combos"]
+          if (
+              len(combo_rec["h_group_indices"]) >= min_groups
+              and len(combo_rec["r_group_indices"]) >= min_groups
+          )
+      ]
+      if shared_combos:
+        paired[episode_id] = {
+            "task_id": rec["task_id"],
+            "h_group_pool": rec["h_group_pool"],
+            "r_group_pool": rec["r_group_pool"],
+            "shared_combos": shared_combos,
+            "lazy_matched_index": True,
+        }
+      continue
+
+    shared_combos = []
+    for combo_rec in rec["shared_combos"]:
+      combo = tuple(int(camera_id) for camera_id in combo_rec["camera_ids"])
+      h_groups = [
+          Group(
+              episode_id=episode_id,
+              task_id=rec["task_id"],
+              role="h",
+              timestamp_ms=int(group["timestamp_ms"]),
+              views=[
+                  ViewRef(
+                      rel_path=view["rel_path"],
+                      camera_id=int(view["camera_id"]),
+                  )
+                  for view in group["views"]
+              ],
+          )
+          for group in combo_rec["h_groups"]
+      ]
+      r_groups = [
+          Group(
+              episode_id=episode_id,
+              task_id=rec["task_id"],
+              role="r",
+              timestamp_ms=int(group["timestamp_ms"]),
+              views=[
+                  ViewRef(
+                      rel_path=view["rel_path"],
+                      camera_id=int(view["camera_id"]),
+                  )
+                  for view in group["views"]
+              ],
+          )
+          for group in combo_rec["r_groups"]
+      ]
+      if len(h_groups) >= min_groups and len(r_groups) >= min_groups:
+        shared_combos.append({
+            "camera_ids": combo,
+            "h": h_groups,
+            "r": r_groups,
+        })
+    if shared_combos:
+      paired[episode_id] = {
+          "h": shared_combos[0]["h"],
+          "r": shared_combos[0]["r"],
+          "shared_combos": shared_combos,
+      }
+  return paired
+
+
+def materialize_combo_groups(
+    group_pool: list[dict],
+    group_indices: list[int],
+    combo: tuple[int, ...],
+    episode_id: str,
+    task_id: str,
+    role: str,
+) -> list[Group]:
+  groups = []
+  for group_idx in group_indices:
+    group = group_pool[int(group_idx)]
+    views_by_camera = {
+        int(camera_id): view
+        for camera_id, view in group["views_by_camera"].items()
+    }
+    groups.append(Group(
+        episode_id=episode_id,
+        task_id=task_id,
+        role=role,
+        timestamp_ms=int(group["timestamp_ms"]),
+        views=[
+            ViewRef(
+                rel_path=views_by_camera[camera_id]["rel_path"],
+                camera_id=int(views_by_camera[camera_id]["camera_id"]),
+            )
+            for camera_id in combo
+        ],
+    ))
+  return groups
+
+
+def build_pool_combo_indices(
+    group_pool: list[dict],
+    combo_size: int,
+) -> dict[tuple[int, ...], list[int]]:
+  combo_indices: dict[tuple[int, ...], list[int]] = defaultdict(list)
+  for idx, group in enumerate(group_pool):
+    camera_ids = sorted(int(camera_id) for camera_id in group["views_by_camera"])
+    if len(camera_ids) < combo_size:
+      continue
+    for combo in itertools.combinations(camera_ids, combo_size):
+      combo_indices[combo].append(idx)
+  return combo_indices
+
+
+def find_shared_valid_pool_combos(
+    h_pool: list[dict],
+    r_pool: list[dict],
+    combo_size: int,
+    min_groups: int,
+) -> list[dict]:
+  h_combo_indices = build_pool_combo_indices(h_pool, combo_size)
+  r_combo_indices = build_pool_combo_indices(r_pool, combo_size)
+  h_valid = {
+      combo for combo, indices in h_combo_indices.items()
+      if len(indices) >= min_groups
+  }
+  r_valid = {
+      combo for combo, indices in r_combo_indices.items()
+      if len(indices) >= min_groups
+  }
+  shared = sorted(h_valid & r_valid)
+  out = []
+  for combo in shared:
+    h_indices = h_combo_indices[combo]
+    r_indices = r_combo_indices[combo]
+    if len(h_indices) >= min_groups and len(r_indices) >= min_groups:
+      out.append({
+          "camera_ids": combo,
+          "h_group_indices": h_indices,
+          "r_group_indices": r_indices,
+      })
+  return out
+
+
+def count_camera_combos(
+    groups: list[Group],
+    combo_size: int,
+) -> Counter[tuple[int, ...]]:
+  counts: Counter[tuple[int, ...]] = Counter()
+  for group in groups:
+    camera_ids = sorted({view.camera_id for view in group.views})
+    if len(camera_ids) < combo_size:
+      continue
+    for combo in itertools.combinations(camera_ids, combo_size):
+      counts[combo] += 1
+  return counts
+
+
+def find_shared_valid_camera_combos(
+    human_groups: list[Group],
+    robot_groups: list[Group],
+    combo_size: int,
+    min_groups: int,
+) -> list[tuple[int, ...]]:
+  h_counts = count_camera_combos(human_groups, combo_size)
+  r_counts = count_camera_combos(robot_groups, combo_size)
+  h_valid = {combo for combo, count in h_counts.items() if count >= min_groups}
+  r_valid = {combo for combo, count in r_counts.items() if count >= min_groups}
+  return sorted(h_valid & r_valid)
+
+
+def filter_groups_to_camera_combo(
+    groups: list[Group],
+    combo: tuple[int, ...],
+) -> list[Group]:
+  out = []
+  for group in groups:
+    by_camera = {view.camera_id: view for view in group.views}
+    if not all(camera_id in by_camera for camera_id in combo):
+      continue
+    out.append(Group(
+        episode_id=group.episode_id,
+        task_id=group.task_id,
+        role=group.role,
+        timestamp_ms=group.timestamp_ms,
+        views=[by_camera[camera_id] for camera_id in combo],
+    ))
+  return out
 
 
 def build_task_to_episodes(
@@ -244,7 +577,9 @@ def build_task_to_episodes(
 ) -> dict[str, list[str]]:
   task_to_episodes: dict[str, list[str]] = defaultdict(list)
   for episode_id, tracks in paired_tracks.items():
-    task_id = tracks["h"][0].task_id
+    task_id = tracks.get("task_id")
+    if task_id is None:
+      task_id = tracks["h"][0].task_id
     task_to_episodes[task_id].append(episode_id)
   return task_to_episodes
 
@@ -259,12 +594,18 @@ def sample_episode_batch(
   if not unique_task_batch:
     return rng.sample(episode_ids, batch_pairs)
   task_ids = [task_id for task_id, eps in task_to_episodes.items() if eps]
-  if len(task_ids) < batch_pairs:
-    raise RuntimeError(
-        f"Not enough tasks for unique-task batch: "
-        f"{len(task_ids)} < {batch_pairs}")
-  selected_tasks = rng.sample(task_ids, batch_pairs)
-  return [rng.choice(task_to_episodes[task_id]) for task_id in selected_tasks]
+  selected_tasks = rng.sample(task_ids, min(batch_pairs, len(task_ids)))
+  selected = [rng.choice(task_to_episodes[task_id]) for task_id in selected_tasks]
+  if len(selected) >= batch_pairs:
+    return selected
+
+  selected_set = set(selected)
+  remaining = [episode_id for episode_id in episode_ids if episode_id not in selected_set]
+  rng.shuffle(remaining)
+  selected.extend(remaining[:batch_pairs - len(selected)])
+  if len(selected) < batch_pairs:
+    selected.extend(rng.choices(episode_ids, k=batch_pairs - len(selected)))
+  return selected
 
 
 def make_transform(image_size: int):
@@ -572,12 +913,25 @@ def main() -> None:
   device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
   max_groups = normalize_max_groups(args.max_groups)
-  paired_tracks = load_tracks(
-      args.index,
-      args.num_timestamps,
-      args.min_views_per_group,
-      max_groups,
-  )
+  if args.training_index is not None:
+    args.matched_camera_combo = True
+  if args.matched_camera_combo and args.max_views_per_group <= 0:
+    raise ValueError("--matched-camera-combo requires --max-views-per-group > 0")
+  if args.training_index is not None:
+    paired_tracks = load_matched_training_index(
+        args.training_index,
+        min_groups=args.num_timestamps,
+        combo_size=args.max_views_per_group,
+    )
+  else:
+    paired_tracks = load_tracks(
+        args.timestamp_groups,
+        args.num_timestamps,
+        args.min_views_per_group,
+        max_groups,
+        matched_camera_combo=args.matched_camera_combo,
+        combo_size=args.max_views_per_group,
+    )
   episode_ids = sorted(paired_tracks, key=lambda x: int(x))
   task_to_episodes = build_task_to_episodes(paired_tracks)
   if len(episode_ids) < args.batch_pairs:
@@ -588,8 +942,10 @@ def main() -> None:
       f"num_timestamps={args.num_timestamps} "
       f"min_views_per_group={args.min_views_per_group} "
       f"max_views_per_group={args.max_views_per_group} "
-      f"max_groups={'all' if max_groups is None else max_groups} "
-      f"unique_task_batch={args.unique_task_batch}")
+      f"max_groups={'ignored' if args.training_index is not None else ('all' if max_groups is None else max_groups)} "
+      f"unique_task_batch={args.unique_task_batch} "
+      f"matched_camera_combo={args.matched_camera_combo} "
+      f"training_index={args.training_index}")
 
   transform = make_transform(args.image_size)
   model = FixedSlotFusionSoftDTW(
@@ -606,7 +962,7 @@ def main() -> None:
       lr=args.lr,
       weight_decay=args.weight_decay,
   )
-  scaler = torch.cuda.amp.GradScaler(enabled=args.amp and device.type == "cuda")
+  scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
   csv_path = args.out_dir / "losses.csv"
   with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -645,22 +1001,49 @@ def main() -> None:
           args.unique_task_batch,
           rng,
       )
-      human_sequences = [
-          stratified_group_sample(
-              paired_tracks[eid]["h"], args.num_timestamps, rng)
-          for eid in batch_episode_ids
-      ]
-      robot_sequences = [
-          stratified_group_sample(
-              paired_tracks[eid]["r"], args.num_timestamps, rng)
-          for eid in batch_episode_ids
-      ]
+      human_sequences = []
+      robot_sequences = []
+      for eid in batch_episode_ids:
+        if args.matched_camera_combo:
+          combo_rec = rng.choice(paired_tracks[eid]["shared_combos"])
+          if isinstance(combo_rec, dict):
+            if "h" in combo_rec:
+              h_groups = combo_rec["h"]
+              r_groups = combo_rec["r"]
+            else:
+              combo = combo_rec["camera_ids"]
+              h_groups = materialize_combo_groups(
+                  paired_tracks[eid]["h_group_pool"],
+                  combo_rec["h_group_indices"],
+                  combo,
+                  eid,
+                  paired_tracks[eid]["task_id"],
+                  "h",
+              )
+              r_groups = materialize_combo_groups(
+                  paired_tracks[eid]["r_group_pool"],
+                  combo_rec["r_group_indices"],
+                  combo,
+                  eid,
+                  paired_tracks[eid]["task_id"],
+                  "r",
+              )
+          else:
+            h_groups = filter_groups_to_camera_combo(paired_tracks[eid]["h"], combo_rec)
+            r_groups = filter_groups_to_camera_combo(paired_tracks[eid]["r"], combo_rec)
+        else:
+          h_groups = paired_tracks[eid]["h"]
+          r_groups = paired_tracks[eid]["r"]
+        human_sequences.append(
+            stratified_group_sample(h_groups, args.num_timestamps, rng))
+        robot_sequences.append(
+            stratified_group_sample(r_groups, args.num_timestamps, rng))
       all_sequences = human_sequences + robot_sequences
       if args.objective == "paired_softdtw_hr_vvcl":
         limited_sequences = make_limited_view_sequences(
             all_sequences, args.max_views_per_group, rng)
         images, group_idx, camera_ids, num_groups = prepare_batch_images(
-            args.tcc_root, limited_sequences, transform, device)
+            args.data_root, limited_sequences, transform, device)
       else:
         subset_sequences = make_view_dropout_sequences(
             all_sequences,
@@ -670,10 +1053,11 @@ def main() -> None:
             rng,
         )
         images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
-            args.tcc_root, subset_sequences, transform, device)
+            args.data_root, subset_sequences, transform, device)
 
       optimizer.zero_grad(set_to_none=True)
-      with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
+      with torch.amp.autocast(
+          "cuda", enabled=args.amp and device.type == "cuda"):
         if args.objective == "paired_softdtw_hr_vvcl":
           z_groups, z_groups_aux = model.encode_groups(
               images, group_idx, camera_ids, num_groups)
