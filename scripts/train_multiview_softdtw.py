@@ -41,7 +41,7 @@ class Group:
 
 
 class FixedSlotFusionSoftDTW(nn.Module):
-  """Frozen ViT backbone + fixed camera slot fusion projector."""
+  """Frozen ViT backbone + fixed camera slot fusion with separate loss heads."""
 
   def __init__(
       self,
@@ -74,7 +74,8 @@ class FixedSlotFusionSoftDTW(nn.Module):
         nn.Linear(fusion_size, fusion_size),
         nn.GELU(),
     )
-    self.projector = nn.Linear(fusion_size, embedding_size)
+    self.projector_sdtw = nn.Linear(fusion_size, embedding_size)
+    self.projector_aux = nn.Linear(fusion_size, embedding_size)
 
   def encode_groups(
       self,
@@ -82,7 +83,7 @@ class FixedSlotFusionSoftDTW(nn.Module):
       group_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
-  ) -> torch.Tensor:
+  ) -> tuple[torch.Tensor, torch.Tensor]:
     feats = self.backbone(images)
     feats = torch.flatten(feats, 1)
     slots = feats.new_zeros(
@@ -91,8 +92,10 @@ class FixedSlotFusionSoftDTW(nn.Module):
     slots[group_indices, camera_ids] = feats
     masks[group_indices, camera_ids] = 1.0
     fused_input = torch.cat([slots.flatten(start_dim=1), masks], dim=-1)
-    z = self.projector(self.fusion(fused_input))
-    return F.normalize(z, dim=-1)
+    fused = self.fusion(fused_input)
+    z_sdtw = self.projector_sdtw(fused)
+    z_aux = self.projector_aux(fused)
+    return F.normalize(z_sdtw, dim=-1), F.normalize(z_aux, dim=-1)
 
   def encode_group_subsets(
       self,
@@ -101,20 +104,35 @@ class FixedSlotFusionSoftDTW(nn.Module):
       subset_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
-  ) -> torch.Tensor:
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     feats = self.backbone(images)
     feats = torch.flatten(feats, 1)
-    slots = feats.new_zeros(
+    subset_slots = feats.new_zeros(
         (num_groups, 2, self.num_camera_slots, feats.shape[-1]))
-    masks = feats.new_zeros((num_groups, 2, self.num_camera_slots))
-    slots[group_indices, subset_indices, camera_ids] = feats
-    masks[group_indices, subset_indices, camera_ids] = 1.0
-    fused_input = torch.cat([
-        slots.flatten(start_dim=2),
-        masks,
+    subset_masks = feats.new_zeros((num_groups, 2, self.num_camera_slots))
+    subset_slots[group_indices, subset_indices, camera_ids] = feats
+    subset_masks[group_indices, subset_indices, camera_ids] = 1.0
+    subset_input = torch.cat([
+        subset_slots.flatten(start_dim=2),
+        subset_masks,
     ], dim=-1)
-    z = self.projector(self.fusion(fused_input))
-    return F.normalize(z, dim=-1)
+    subset_fused = self.fusion(subset_input)
+    z_subset_sdtw = self.projector_sdtw(subset_fused)
+    z_subset_aux = self.projector_aux(subset_fused)
+
+    full_slots = feats.new_zeros(
+        (num_groups, self.num_camera_slots, feats.shape[-1]))
+    full_masks = feats.new_zeros((num_groups, self.num_camera_slots))
+    full_slots[group_indices, camera_ids] = feats
+    full_masks[group_indices, camera_ids] = 1.0
+    full_input = torch.cat([full_slots.flatten(start_dim=1), full_masks], dim=-1)
+    full_fused = self.fusion(full_input)
+    z_full_sdtw = self.projector_sdtw(full_fused)
+    return (
+        F.normalize(z_full_sdtw, dim=-1),
+        F.normalize(z_subset_sdtw, dim=-1),
+        F.normalize(z_subset_aux, dim=-1),
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -136,7 +154,12 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--num-timestamps", type=int, default=12)
   parser.add_argument("--batch-pairs", type=int, default=4)
-  parser.add_argument("--max-groups", type=int, default=200000)
+  parser.add_argument(
+      "--max-groups",
+      type=int,
+      default=200000,
+      help="Maximum timestamp groups to load; use <=0 for full index.",
+  )
   parser.add_argument("--max-iters", type=int, default=1000)
   parser.add_argument("--log-every", type=int, default=20)
   parser.add_argument("--save-every", type=int, default=500)
@@ -152,7 +175,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--lambda-hr-vvcl", type=float, default=0.5)
   parser.add_argument("--mv-temperature", type=float, default=0.1)
   parser.add_argument("--max-views-per-group", type=int, default=4)
+  parser.add_argument("--min-views-per-group", type=int, default=2)
   parser.add_argument("--view-keep-ratio", type=float, default=0.75)
+  parser.add_argument("--disjoint-view-subsets", action="store_true")
+  parser.add_argument("--softdtw-full-views", action="store_true")
+  parser.add_argument("--unique-task-batch", action="store_true")
   parser.add_argument("--lr", type=float, default=5e-5)
   parser.add_argument("--weight-decay", type=float, default=0.0)
   parser.add_argument("--seed", type=int, default=1)
@@ -169,9 +196,14 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
+def normalize_max_groups(max_groups: int) -> int | None:
+  return None if max_groups <= 0 else max_groups
+
+
 def load_tracks(
     index_path: Path,
     min_groups: int,
+    min_views_per_group: int,
     max_groups: int | None,
 ) -> dict[str, dict[str, list[Group]]]:
   tracks: dict[tuple[str, str], list[Group]] = defaultdict(list)
@@ -180,7 +212,7 @@ def load_tracks(
     reader = csv.DictReader(f)
     for row in reader:
       views_raw = json.loads(row["views_json"])
-      if len(views_raw) < 2:
+      if len(views_raw) < min_views_per_group:
         continue
       group = Group(
           episode_id=row["episode_id"],
@@ -205,6 +237,34 @@ def load_tracks(
     if len(h) >= min_groups and len(r) >= min_groups:
       paired[episode_id] = {"h": h, "r": r}
   return paired
+
+
+def build_task_to_episodes(
+    paired_tracks: dict[str, dict[str, list[Group]]],
+) -> dict[str, list[str]]:
+  task_to_episodes: dict[str, list[str]] = defaultdict(list)
+  for episode_id, tracks in paired_tracks.items():
+    task_id = tracks["h"][0].task_id
+    task_to_episodes[task_id].append(episode_id)
+  return task_to_episodes
+
+
+def sample_episode_batch(
+    episode_ids: list[str],
+    task_to_episodes: dict[str, list[str]],
+    batch_pairs: int,
+    unique_task_batch: bool,
+    rng: random.Random,
+) -> list[str]:
+  if not unique_task_batch:
+    return rng.sample(episode_ids, batch_pairs)
+  task_ids = [task_id for task_id, eps in task_to_episodes.items() if eps]
+  if len(task_ids) < batch_pairs:
+    raise RuntimeError(
+        f"Not enough tasks for unique-task batch: "
+        f"{len(task_ids)} < {batch_pairs}")
+  selected_tasks = rng.sample(task_ids, batch_pairs)
+  return [rng.choice(task_to_episodes[task_id]) for task_id in selected_tasks]
 
 
 def make_transform(image_size: int):
@@ -273,14 +333,30 @@ def make_view_dropout_sequences(
     sequences: list[list[Group]],
     max_views: int,
     keep_ratio: float,
+    disjoint: bool,
     rng: random.Random,
 ) -> list[list[tuple[list[ViewRef], list[ViewRef]]]]:
   out = []
   for sequence in sequences:
     subset_sequence = []
     for group in sequence:
-      subset_a = sample_view_subset(group.views, max_views, keep_ratio, rng)
-      subset_b = sample_view_subset(group.views, max_views, keep_ratio, rng)
+      if disjoint:
+        views = list(group.views)
+        rng.shuffle(views)
+        if max_views > 0:
+          views = views[:max_views]
+        if len(views) == 1:
+          subset_a = views
+          subset_b = views
+        else:
+          split = max(1, len(views) // 2)
+          subset_a = views[:split]
+          subset_b = views[split:]
+          if not subset_b:
+            subset_b = views[:1]
+      else:
+        subset_a = sample_view_subset(group.views, max_views, keep_ratio, rng)
+        subset_b = sample_view_subset(group.views, max_views, keep_ratio, rng)
       subset_sequence.append((subset_a, subset_b))
     out.append(subset_sequence)
   return out
@@ -495,13 +571,25 @@ def main() -> None:
   rng = random.Random(args.seed)
   device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-  paired_tracks = load_tracks(args.index, args.num_timestamps, args.max_groups)
+  max_groups = normalize_max_groups(args.max_groups)
+  paired_tracks = load_tracks(
+      args.index,
+      args.num_timestamps,
+      args.min_views_per_group,
+      max_groups,
+  )
   episode_ids = sorted(paired_tracks, key=lambda x: int(x))
+  task_to_episodes = build_task_to_episodes(paired_tracks)
   if len(episode_ids) < args.batch_pairs:
     raise RuntimeError("Not enough paired episode tracks.")
   print(
       f"loaded paired_episodes={len(episode_ids)} "
-      f"num_timestamps={args.num_timestamps}")
+      f"tasks={len(task_to_episodes)} "
+      f"num_timestamps={args.num_timestamps} "
+      f"min_views_per_group={args.min_views_per_group} "
+      f"max_views_per_group={args.max_views_per_group} "
+      f"max_groups={'all' if max_groups is None else max_groups} "
+      f"unique_task_batch={args.unique_task_batch}")
 
   transform = make_transform(args.image_size)
   model = FixedSlotFusionSoftDTW(
@@ -550,7 +638,13 @@ def main() -> None:
     start = time.time()
     for step in range(1, args.max_iters + 1):
       iter_start = time.time()
-      batch_episode_ids = rng.sample(episode_ids, args.batch_pairs)
+      batch_episode_ids = sample_episode_batch(
+          episode_ids,
+          task_to_episodes,
+          args.batch_pairs,
+          args.unique_task_batch,
+          rng,
+      )
       human_sequences = [
           stratified_group_sample(
               paired_tracks[eid]["h"], args.num_timestamps, rng)
@@ -572,6 +666,7 @@ def main() -> None:
             all_sequences,
             args.max_views_per_group,
             args.view_keep_ratio,
+            args.disjoint_view_subsets,
             rng,
         )
         images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
@@ -580,13 +675,16 @@ def main() -> None:
       optimizer.zero_grad(set_to_none=True)
       with torch.cuda.amp.autocast(enabled=args.amp and device.type == "cuda"):
         if args.objective == "paired_softdtw_hr_vvcl":
-          z_groups = model.encode_groups(
+          z_groups, z_groups_aux = model.encode_groups(
               images, group_idx, camera_ids, num_groups)
         else:
-          z_subsets = model.encode_group_subsets(
+          z_full_sdtw, z_subsets_sdtw, z_subsets_aux = model.encode_group_subsets(
               images, group_idx, subset_idx, camera_ids, num_groups)
-          z_groups = F.normalize(
-              0.5 * (z_subsets[:, 0] + z_subsets[:, 1]), dim=-1)
+          if args.softdtw_full_views:
+            z_groups = z_full_sdtw
+          else:
+            z_groups = F.normalize(
+                0.5 * (z_subsets_sdtw[:, 0] + z_subsets_sdtw[:, 1]), dim=-1)
         z = z_groups.reshape(2 * args.batch_pairs, args.num_timestamps, -1)
         h_seq = z[:args.batch_pairs]
         r_seq = z[args.batch_pairs:]
@@ -597,8 +695,12 @@ def main() -> None:
               gamma=args.gamma,
               divergence=args.divergence,
           )
+          z_aux = z_groups_aux.reshape(
+              2 * args.batch_pairs, args.num_timestamps, -1)
+          h_seq_aux = z_aux[:args.batch_pairs]
+          r_seq_aux = z_aux[args.batch_pairs:]
           loss_aux, aux = compute_hr_vvcl(
-              h_seq, r_seq, args.mv_temperature)
+              h_seq_aux, r_seq_aux, args.mv_temperature)
           zero = torch.zeros((), device=device)
           loss_aux_h = loss_aux
           loss_aux_r = zero
@@ -617,7 +719,7 @@ def main() -> None:
               temperature=args.temperature,
               divergence=args.divergence,
           )
-          z_sub = z_subsets.reshape(
+          z_sub = z_subsets_aux.reshape(
               2 * args.batch_pairs, args.num_timestamps, 2, -1)
           h_sub = z_sub[:args.batch_pairs].reshape(
               args.batch_pairs * args.num_timestamps, 2, -1)
