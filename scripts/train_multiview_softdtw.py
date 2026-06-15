@@ -7,23 +7,24 @@ import argparse
 import csv
 import itertools
 import json
+import os
 import random
-import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from PIL import Image
+from torch.nn.parallel import DistributedDataParallel
 from torchvision import transforms
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from xirl.losses import soft_dtw_sequence_distance  # pylint: disable=wrong-import-position
-from xirl.models import ViTB16Backbone  # pylint: disable=wrong-import-position
+from xirl.losses import soft_dtw_sequence_distance
+from xirl.models import ViTB16Backbone
 
 
 PATH_ARG_NAMES = {
@@ -31,8 +32,10 @@ PATH_ARG_NAMES = {
     "timestamp_groups",
     "training_index",
     "out_dir",
+    "output_root",
     "pretrain_path",
 }
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs/default.yaml"
 
 
 @dataclass
@@ -144,10 +147,26 @@ class FixedSlotFusionSoftDTW(nn.Module):
         F.normalize(z_subset_aux, dim=-1),
     )
 
+  def forward(
+      self,
+      images: torch.Tensor,
+      group_indices: torch.Tensor,
+      subset_indices: torch.Tensor,
+      camera_ids: torch.Tensor,
+      num_groups: int,
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return self.encode_group_subsets(
+        images, group_indices, subset_indices, camera_ids, num_groups)
+
 
 def load_config(path: Path) -> dict:
   with path.open("r", encoding="utf-8") as f:
-    return json.load(f)
+    config = yaml.safe_load(f)
+  if config is None:
+    return {}
+  if not isinstance(config, dict):
+    raise ValueError(f"Config must be a YAML mapping: {path}")
+  return config
 
 
 def normalize_config_keys(config: dict) -> dict:
@@ -156,6 +175,8 @@ def normalize_config_keys(config: dict) -> dict:
 
 def coerce_path_args(args: argparse.Namespace) -> argparse.Namespace:
   for name in PATH_ARG_NAMES:
+    if not hasattr(args, name):
+      continue
     value = getattr(args, name)
     if value is not None and not isinstance(value, Path):
       setattr(args, name, Path(value))
@@ -163,96 +184,80 @@ def coerce_path_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def build_parser(parents=None) -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(parents=parents or [])
+  parser = argparse.ArgumentParser(
+      parents=parents or [],
+      argument_default=argparse.SUPPRESS,
+  )
   parser.add_argument(
       "--data-root",
       "--tcc-root",
       dest="data_root",
       type=Path,
-      default=Path("/home/paichichi/data/RH20T/TCC_RH20T"),
   )
   parser.add_argument(
       "--timestamp-groups",
       "--index",
       dest="timestamp_groups",
       type=Path,
-      default=Path("/home/paichichi/data/RH20T/TCC_RH20T/tcn_timestamp_groups.csv"),
   )
   parser.add_argument(
       "--training-index",
       "--matched-index",
       dest="training_index",
       type=Path,
-      default=Path("/home/paichichi/data/RH20T/TCC_RH20T/training_index.pt"),
       help="Universal matched-camera training index.",
   )
   parser.add_argument(
       "--out-dir",
       type=Path,
-      default=Path("/tmp/tcc-core/multiview_softdtw_runs/smoke"),
   )
-  parser.add_argument("--num-timestamps", type=int, default=8)
-  parser.add_argument("--batch-pairs", type=int, default=4)
+  parser.add_argument("--output-root", type=Path)
+  parser.add_argument("--run-name")
+  parser.add_argument("--num-timestamps", type=int)
   parser.add_argument(
-      "--max-groups",
+      "--num-multi-view",
+      dest="num_multi_view",
       type=int,
-      default=200000,
-      help="Maximum timestamp groups to load; use <=0 for full index.",
+      help="Number of timestamp-aligned camera views used per group.",
   )
-  parser.add_argument("--max-iters", type=int, default=1000)
-  parser.add_argument("--log-every", type=int, default=20)
-  parser.add_argument("--save-every", type=int, default=500)
-  parser.add_argument("--gamma", type=float, default=0.1)
-  parser.add_argument("--temperature", type=float, default=0.1)
-  parser.add_argument("--divergence", action=argparse.BooleanOptionalAction, default=True)
+  parser.add_argument("--batch-pairs", type=int)
+  parser.add_argument("--max-iters", type=int)
+  parser.add_argument("--log-every", type=int)
+  parser.add_argument("--save-every", type=int)
+  parser.add_argument("--gamma", type=float)
+  parser.add_argument("--temperature", type=float)
   parser.add_argument(
-      "--objective",
-      choices=["contrastive_softdtw_mv", "paired_softdtw_hr_vvcl"],
-      default="contrastive_softdtw_mv",
-  )
-  parser.add_argument("--lambda-mv", type=float, default=0.5)
-  parser.add_argument("--lambda-hr-vvcl", type=float, default=0.5)
-  parser.add_argument("--mv-temperature", type=float, default=0.1)
-  parser.add_argument("--max-views-per-group", type=int, default=4)
-  parser.add_argument("--min-views-per-group", type=int, default=4)
-  parser.add_argument("--view-keep-ratio", type=float, default=0.75)
-  parser.add_argument(
-      "--disjoint-view-subsets",
+      "--softdtw-divergence",
       action=argparse.BooleanOptionalAction,
-      default=True,
+      dest="softdtw_divergence",
+      default=argparse.SUPPRESS,
   )
+  parser.add_argument("--lambda-mv", type=float)
+  parser.add_argument("--mv-temperature", type=float)
   parser.add_argument(
-      "--softdtw-full-views",
+      "--camera-matched-pairing",
       action=argparse.BooleanOptionalAction,
-      default=True,
-  )
-  parser.add_argument(
-      "--unique-task-batch",
-      action=argparse.BooleanOptionalAction,
-      default=True,
-  )
-  parser.add_argument(
-      "--matched-camera-combo",
-      action=argparse.BooleanOptionalAction,
-      default=True,
+      dest="camera_matched_pairing",
+      default=argparse.SUPPRESS,
       help=(
-          "Require H/R to sample the same valid camera combo inside each "
-          "paired episode. The combo size is --max-views-per-group."
+          "Require H/R to sample the same valid camera set inside each "
+          "paired episode. The camera set size is --num-multi-view."
       ),
   )
-  parser.add_argument("--lr", type=float, default=5e-5)
-  parser.add_argument("--weight-decay", type=float, default=0.0)
-  parser.add_argument("--seed", type=int, default=1)
-  parser.add_argument("--image-size", type=int, default=224)
-  parser.add_argument("--device", default="cuda:0")
-  parser.add_argument("--embedding-size", type=int, default=128)
-  parser.add_argument("--fusion-size", type=int, default=768)
-  parser.add_argument("--num-camera-slots", type=int, default=30)
+  parser.add_argument("--lr", type=float)
+  parser.add_argument("--weight-decay", type=float)
+  parser.add_argument("--seed", type=int)
+  parser.add_argument("--image-size", type=int)
+  parser.add_argument("--device")
+  parser.add_argument("--embedding-size", type=int)
+  parser.add_argument("--fusion-size", type=int)
+  parser.add_argument("--num-camera-slots", type=int)
+  parser.add_argument("--pretrain-path")
   parser.add_argument(
-      "--pretrain-path",
-      default="/home/paichichi/data/pretrain/D4R_IN_1M.pth",
+      "--amp",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
   )
-  parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
   return parser
 
 
@@ -261,35 +266,55 @@ def parse_args() -> argparse.Namespace:
   config_parser.add_argument(
       "--config",
       type=Path,
-      help="JSON config file. CLI arguments override config values.",
+      help="YAML config file. CLI arguments override config values.",
   )
   config_args, _ = config_parser.parse_known_args()
   parser = build_parser(parents=[config_parser])
+  valid_keys = {
+      action.dest for action in parser._actions  # pylint: disable=protected-access
+  }
 
+  merged_config = {}
+  config_sources = []
+  if DEFAULT_CONFIG_PATH.exists():
+    config_sources.append(DEFAULT_CONFIG_PATH)
   if config_args.config is not None:
-    config = normalize_config_keys(load_config(config_args.config))
-    valid_keys = {
-        action.dest for action in parser._actions  # pylint: disable=protected-access
-    }
+    config_sources.append(config_args.config)
+
+  for config_path in config_sources:
+    config = normalize_config_keys(load_config(config_path))
     unknown = sorted(set(config) - valid_keys)
     if unknown:
       raise ValueError(
-          f"Unknown config keys in {config_args.config}: {unknown}")
-    parser.set_defaults(**config)
+          f"Unknown config keys in {config_path}: {unknown}")
+    merged_config.update(config)
 
-  return coerce_path_args(parser.parse_args())
+  cli_args = vars(parser.parse_args())
+  merged_config.update(cli_args)
+  if "config" not in merged_config:
+    merged_config["config"] = config_args.config
+
+  args = coerce_path_args(argparse.Namespace(**merged_config))
+  if not hasattr(args, "out_dir"):
+    if not hasattr(args, "output_root") or not hasattr(args, "run_name"):
+      raise ValueError(
+          "Config must provide either out_dir or both output_root and run_name.")
+    args.out_dir = args.output_root / args.run_name
+  return coerce_path_args(args)
 
 
-def normalize_max_groups(max_groups: int) -> int | None:
-  return None if max_groups <= 0 else max_groups
+def normalize_max_groups(max_groups: int | None) -> int | None:
+  if max_groups is None or max_groups <= 0:
+    return None
+  return max_groups
 
 
 def load_tracks(
     index_path: Path,
     min_groups: int,
-    min_views_per_group: int,
+    num_multi_view: int,
     max_groups: int | None,
-    matched_camera_combo: bool,
+    camera_matched_pairing: bool,
     combo_size: int,
 ) -> dict[str, dict[str, list[Group]]]:
   tracks: dict[tuple[str, str], list[Group]] = defaultdict(list)
@@ -298,7 +323,7 @@ def load_tracks(
     reader = csv.DictReader(f)
     for row in reader:
       views_raw = json.loads(row["views_json"])
-      if len(views_raw) < min_views_per_group:
+      if len(views_raw) < num_multi_view:
         continue
       group = Group(
           episode_id=row["episode_id"],
@@ -322,7 +347,7 @@ def load_tracks(
     r = sorted(tracks.get((episode_id, "r"), []), key=lambda g: g.timestamp_ms)
     if len(h) < min_groups or len(r) < min_groups:
       continue
-    if matched_camera_combo:
+    if camera_matched_pairing:
       shared_combos = find_shared_valid_camera_combos(
           h, r, combo_size=combo_size, min_groups=min_groups)
       if not shared_combos:
@@ -356,7 +381,7 @@ def load_matched_training_index(
   if payload["format"] != "matched_combo_universal_group_pool_v1" and int(payload["num_views"]) != combo_size:
     raise ValueError(
         f"Matched index has {payload['num_views']} views, "
-        f"but --max-views-per-group={combo_size}.")
+        f"but --num-multi-view={combo_size}.")
 
   paired = {}
   for episode_id, rec in payload["episodes"].items():
@@ -584,14 +609,45 @@ def build_task_to_episodes(
   return task_to_episodes
 
 
+def collect_group_camera_ids(group) -> set[int]:
+  if isinstance(group, Group):
+    return {view.camera_id for view in group.views}
+  if isinstance(group, dict):
+    if "views_by_camera" in group:
+      return {int(camera_id) for camera_id in group["views_by_camera"]}
+    if "views" in group:
+      return {int(view["camera_id"]) for view in group["views"]}
+  return set()
+
+
+def infer_num_camera_slots(paired_tracks: dict[str, dict]) -> int:
+  camera_ids: set[int] = set()
+  for tracks in paired_tracks.values():
+    for key in ["h", "r", "h_group_pool", "r_group_pool"]:
+      for group in tracks.get(key, []):
+        camera_ids.update(collect_group_camera_ids(group))
+    for combo_rec in tracks.get("shared_combos", []):
+      if isinstance(combo_rec, dict):
+        if "camera_ids" in combo_rec:
+          camera_ids.update(int(camera_id) for camera_id in combo_rec["camera_ids"])
+        for key in ["h", "r"]:
+          for group in combo_rec.get(key, []):
+            camera_ids.update(collect_group_camera_ids(group))
+      else:
+        camera_ids.update(int(camera_id) for camera_id in combo_rec)
+  if not camera_ids:
+    raise ValueError("Could not infer camera slots from paired tracks.")
+  return max(camera_ids) + 1
+
+
 def sample_episode_batch(
     episode_ids: list[str],
     task_to_episodes: dict[str, list[str]],
     batch_pairs: int,
-    unique_task_batch: bool,
+    prefer_distinct_tasks: bool,
     rng: random.Random,
 ) -> list[str]:
-  if not unique_task_batch:
+  if not prefer_distinct_tasks:
     return rng.sample(episode_ids, batch_pairs)
   task_ids = [task_id for task_id, eps in task_to_episodes.items() if eps]
   selected_tasks = rng.sample(task_ids, min(batch_pairs, len(task_ids)))
@@ -649,8 +705,8 @@ def stratified_group_sample(
 
 
 def load_image(root: Path, rel_path: str, transform) -> torch.Tensor:
-  image = Image.open(root / rel_path).convert("RGB")
-  return transform(image)
+  with Image.open(root / rel_path) as image:
+    return transform(image.convert("RGB"))
 
 
 def sample_view_subset(
@@ -786,7 +842,7 @@ def compute_softdtw_contrastive(
     r_seq,
     gamma,
     temperature,
-    divergence,
+    softdtw_divergence,
 ):
   batch_size = h_seq.shape[0]
   h_grid = h_seq[:, None].expand(batch_size, batch_size, *h_seq.shape[1:])
@@ -798,7 +854,7 @@ def compute_softdtw_contrastive(
       r_flat,
       gamma=gamma,
       normalize_dimension=False,
-      divergence=divergence,
+      divergence=softdtw_divergence,
       normalize_time=True,
   ).reshape(batch_size, batch_size)
   labels = torch.arange(batch_size, device=h_seq.device)
@@ -824,14 +880,14 @@ def compute_softdtw_paired(
     h_seq,
     r_seq,
     gamma,
-    divergence,
+    softdtw_divergence,
 ):
   distances = soft_dtw_sequence_distance(
       h_seq,
       r_seq,
       gamma=gamma,
       normalize_dimension=False,
-      divergence=divergence,
+      divergence=softdtw_divergence,
       normalize_time=True,
   )
   return distances.mean(), {
@@ -904,58 +960,97 @@ def trainable_summary(model):
   )
 
 
+def init_distributed(args: argparse.Namespace):
+  world_size = int(os.environ.get("WORLD_SIZE", "1"))
+  rank = int(os.environ.get("RANK", "0"))
+  local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+  distributed = world_size > 1
+  if distributed:
+    if not torch.cuda.is_available():
+      raise RuntimeError("DDP training requires CUDA.")
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend="nccl")
+    device = torch.device("cuda", local_rank)
+  else:
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+  return distributed, rank, local_rank, world_size, device
+
+
+def cleanup_distributed(distributed: bool):
+  if distributed and dist.is_initialized():
+    dist.destroy_process_group()
+
+
 def main() -> None:
   args = parse_args()
   args.out_dir.mkdir(parents=True, exist_ok=True)
-  random.seed(args.seed)
-  torch.manual_seed(args.seed)
-  rng = random.Random(args.seed)
-  device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+  distributed, rank, local_rank, world_size, device = init_distributed(args)
+  is_main = rank == 0
+  seed = args.seed + rank
+  random.seed(seed)
+  torch.manual_seed(seed)
+  rng = random.Random(seed)
 
-  max_groups = normalize_max_groups(args.max_groups)
+  max_groups = normalize_max_groups(getattr(args, "max_groups", None))
+  args.training_index = getattr(args, "training_index", None)
+  args.timestamp_groups = getattr(args, "timestamp_groups", None)
+  if args.training_index is None and args.timestamp_groups is None:
+    raise ValueError("Config must provide training_index or timestamp_groups.")
   if args.training_index is not None:
-    args.matched_camera_combo = True
-  if args.matched_camera_combo and args.max_views_per_group <= 0:
-    raise ValueError("--matched-camera-combo requires --max-views-per-group > 0")
+    args.camera_matched_pairing = True
+  if args.camera_matched_pairing and args.num_multi_view <= 0:
+    raise ValueError(
+        "--camera-matched-pairing requires --num-multi-view > 0")
   if args.training_index is not None:
     paired_tracks = load_matched_training_index(
         args.training_index,
         min_groups=args.num_timestamps,
-        combo_size=args.max_views_per_group,
+        combo_size=args.num_multi_view,
     )
   else:
     paired_tracks = load_tracks(
         args.timestamp_groups,
         args.num_timestamps,
-        args.min_views_per_group,
+        args.num_multi_view,
         max_groups,
-        matched_camera_combo=args.matched_camera_combo,
-        combo_size=args.max_views_per_group,
+        camera_matched_pairing=args.camera_matched_pairing,
+        combo_size=args.num_multi_view,
     )
   episode_ids = sorted(paired_tracks, key=lambda x: int(x))
   task_to_episodes = build_task_to_episodes(paired_tracks)
   if len(episode_ids) < args.batch_pairs:
     raise RuntimeError("Not enough paired episode tracks.")
-  print(
-      f"loaded paired_episodes={len(episode_ids)} "
-      f"tasks={len(task_to_episodes)} "
-      f"num_timestamps={args.num_timestamps} "
-      f"min_views_per_group={args.min_views_per_group} "
-      f"max_views_per_group={args.max_views_per_group} "
-      f"max_groups={'ignored' if args.training_index is not None else ('all' if max_groups is None else max_groups)} "
-      f"unique_task_batch={args.unique_task_batch} "
-      f"matched_camera_combo={args.matched_camera_combo} "
-      f"training_index={args.training_index}")
+  if not hasattr(args, "num_camera_slots") or args.num_camera_slots is None:
+    args.num_camera_slots = infer_num_camera_slots(paired_tracks)
+  if is_main:
+    print(
+        f"loaded paired_episodes={len(episode_ids)} "
+        f"tasks={len(task_to_episodes)} "
+        f"num_timestamps={args.num_timestamps} "
+        f"num_multi_view={args.num_multi_view} "
+        f"num_camera_slots={args.num_camera_slots} "
+        f"camera_matched_pairing={args.camera_matched_pairing} "
+        f"world_size={world_size} "
+        f"training_index={args.training_index}")
 
   transform = make_transform(args.image_size)
-  model = FixedSlotFusionSoftDTW(
+  raw_model = FixedSlotFusionSoftDTW(
       num_camera_slots=args.num_camera_slots,
       embedding_size=args.embedding_size,
       fusion_size=args.fusion_size,
       pretrain_path=args.pretrain_path,
       train_layernorm=True,
   ).to(device).train()
-  print(trainable_summary(model))
+  if is_main:
+    print(trainable_summary(raw_model))
+  if distributed:
+    model = DistributedDataParallel(
+        raw_model,
+        device_ids=[local_rank],
+        output_device=local_rank,
+    )
+  else:
+    model = raw_model
 
   optimizer = torch.optim.AdamW(
       [p for p in model.parameters() if p.requires_grad],
@@ -964,7 +1059,8 @@ def main() -> None:
   )
   scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
-  csv_path = args.out_dir / "losses.csv"
+  csv_name = "losses.csv" if is_main else f"losses_rank{rank}.csv"
+  csv_path = args.out_dir / csv_name
   with csv_path.open("w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     writer.writerow([
@@ -998,13 +1094,13 @@ def main() -> None:
           episode_ids,
           task_to_episodes,
           args.batch_pairs,
-          args.unique_task_batch,
+          True,
           rng,
       )
       human_sequences = []
       robot_sequences = []
       for eid in batch_episode_ids:
-        if args.matched_camera_combo:
+        if args.camera_matched_pairing:
           combo_rec = rng.choice(paired_tracks[eid]["shared_combos"])
           if isinstance(combo_rec, dict):
             if "h" in combo_rec:
@@ -1039,82 +1135,43 @@ def main() -> None:
         robot_sequences.append(
             stratified_group_sample(r_groups, args.num_timestamps, rng))
       all_sequences = human_sequences + robot_sequences
-      if args.objective == "paired_softdtw_hr_vvcl":
-        limited_sequences = make_limited_view_sequences(
-            all_sequences, args.max_views_per_group, rng)
-        images, group_idx, camera_ids, num_groups = prepare_batch_images(
-            args.data_root, limited_sequences, transform, device)
-      else:
-        subset_sequences = make_view_dropout_sequences(
-            all_sequences,
-            args.max_views_per_group,
-            args.view_keep_ratio,
-            args.disjoint_view_subsets,
-            rng,
-        )
-        images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
-            args.data_root, subset_sequences, transform, device)
+      subset_sequences = make_view_dropout_sequences(
+          all_sequences,
+          args.num_multi_view,
+          keep_ratio=0.75,
+          disjoint=True,
+          rng=rng,
+      )
+      images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
+          args.data_root, subset_sequences, transform, device)
 
       optimizer.zero_grad(set_to_none=True)
       with torch.amp.autocast(
           "cuda", enabled=args.amp and device.type == "cuda"):
-        if args.objective == "paired_softdtw_hr_vvcl":
-          z_groups, z_groups_aux = model.encode_groups(
-              images, group_idx, camera_ids, num_groups)
-        else:
-          z_full_sdtw, z_subsets_sdtw, z_subsets_aux = model.encode_group_subsets(
-              images, group_idx, subset_idx, camera_ids, num_groups)
-          if args.softdtw_full_views:
-            z_groups = z_full_sdtw
-          else:
-            z_groups = F.normalize(
-                0.5 * (z_subsets_sdtw[:, 0] + z_subsets_sdtw[:, 1]), dim=-1)
+        z_groups, _, z_subsets_aux = model(
+            images, group_idx, subset_idx, camera_ids, num_groups)
         z = z_groups.reshape(2 * args.batch_pairs, args.num_timestamps, -1)
         h_seq = z[:args.batch_pairs]
         r_seq = z[args.batch_pairs:]
-        if args.objective == "paired_softdtw_hr_vvcl":
-          loss_softdtw, metrics = compute_softdtw_paired(
-              h_seq,
-              r_seq,
-              gamma=args.gamma,
-              divergence=args.divergence,
-          )
-          z_aux = z_groups_aux.reshape(
-              2 * args.batch_pairs, args.num_timestamps, -1)
-          h_seq_aux = z_aux[:args.batch_pairs]
-          r_seq_aux = z_aux[args.batch_pairs:]
-          loss_aux, aux = compute_hr_vvcl(
-              h_seq_aux, r_seq_aux, args.mv_temperature)
-          zero = torch.zeros((), device=device)
-          loss_aux_h = loss_aux
-          loss_aux_r = zero
-          aux_h = aux
-          aux_r = {
-              "top1": zero,
-              "diag": zero,
-              "off": zero,
-          }
-          loss = loss_softdtw + args.lambda_hr_vvcl * loss_aux
-        else:
-          loss_softdtw, metrics = compute_softdtw_contrastive(
-              h_seq,
-              r_seq,
-              gamma=args.gamma,
-              temperature=args.temperature,
-              divergence=args.divergence,
-          )
-          z_sub = z_subsets_aux.reshape(
-              2 * args.batch_pairs, args.num_timestamps, 2, -1)
-          h_sub = z_sub[:args.batch_pairs].reshape(
-              args.batch_pairs * args.num_timestamps, 2, -1)
-          r_sub = z_sub[args.batch_pairs:].reshape(
-              args.batch_pairs * args.num_timestamps, 2, -1)
-          loss_aux_h, aux_h = compute_multiview_infonce(
-              h_sub[:, 0], h_sub[:, 1], args.mv_temperature)
-          loss_aux_r, aux_r = compute_multiview_infonce(
-              r_sub[:, 0], r_sub[:, 1], args.mv_temperature)
-          loss_aux = 0.5 * (loss_aux_h + loss_aux_r)
-          loss = loss_softdtw + args.lambda_mv * loss_aux
+        loss_softdtw, metrics = compute_softdtw_contrastive(
+            h_seq,
+            r_seq,
+            gamma=args.gamma,
+            temperature=args.temperature,
+            softdtw_divergence=args.softdtw_divergence,
+        )
+        z_sub = z_subsets_aux.reshape(
+            2 * args.batch_pairs, args.num_timestamps, 2, -1)
+        h_sub = z_sub[:args.batch_pairs].reshape(
+            args.batch_pairs * args.num_timestamps, 2, -1)
+        r_sub = z_sub[args.batch_pairs:].reshape(
+            args.batch_pairs * args.num_timestamps, 2, -1)
+        loss_aux_h, aux_h = compute_multiview_infonce(
+            h_sub[:, 0], h_sub[:, 1], args.mv_temperature)
+        loss_aux_r, aux_r = compute_multiview_infonce(
+            r_sub[:, 0], r_sub[:, 1], args.mv_temperature)
+        loss_aux = 0.5 * (loss_aux_h + loss_aux_r)
+        loss = loss_softdtw + args.lambda_mv * loss_aux
       scaler.scale(loss).backward()
       scaler.step(optimizer)
       scaler.update()
@@ -1147,7 +1204,7 @@ def main() -> None:
           f"{mem_mb:.1f}",
       ]
       writer.writerow(row)
-      if step == 1 or step % args.log_every == 0:
+      if is_main and (step == 1 or step % args.log_every == 0):
         print(
             f"step {step:05d} total={row[1]} sdtw={row[2]} aux={row[3]} "
             f"sdtw_top1={row[6]} pos/off={row[7]}/{row[8]} "
@@ -1159,17 +1216,19 @@ def main() -> None:
             flush=True,
         )
         f.flush()
-      if args.save_every and step % args.save_every == 0:
+      if is_main and args.save_every and step % args.save_every == 0:
         torch.save(
             {
                 "step": step,
-                "model": model.state_dict(),
+                "model": raw_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
             },
             args.out_dir / f"checkpoint_{step:06d}.pt",
         )
-    print(f"done in {time.time() - start:.1f}s; losses={csv_path}")
+    if is_main:
+      print(f"done in {time.time() - start:.1f}s; losses={csv_path}")
+  cleanup_distributed(distributed)
 
 
 if __name__ == "__main__":

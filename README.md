@@ -1,20 +1,60 @@
 # TCC-core
 
-Minimal RH20T multi-view pretraining code.
+RH20T multi-view pretraining code.
 
-The current training path is no longer vanilla TCC. It uses:
+The current training objective is not vanilla TCC. It uses:
 
-- same-side timestamp-aligned multi-view fusion
-- H/R matched camera combos
-- contrastive Soft-DTW over human/robot fused sequences
-- auxiliary multi-view VVCL over disjoint view subsets
+- timestamp-aligned multi-view fusion
+- camera-matched H/R pairing
+- Human/Robot sequence-level contrastive Soft-DTW
+- same-side multi-view VVCL auxiliary loss
 
-## Data
+## 1. Environment
 
-Expected data root:
+Install a PyTorch build that matches the server CUDA version first. Then install this repo.
+
+```bash
+conda create -n tcc-core python=3.10 -y
+conda activate tcc-core
+```
+
+Install PyTorch:
+
+```bash
+# Choose torch / torchvision according to the server CUDA version.
+# Do not blindly reuse a command from another machine.
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Install project dependencies:
+
+```bash
+pip install numpy pillow pyyaml
+pip install -e . --no-deps
+```
+
+Check the environment:
+
+```bash
+python - <<'PY'
+import torch
+import torchvision
+import yaml
+from xirl.models import ViTB16Backbone
+
+print("torch:", torch.__version__)
+print("cuda:", torch.cuda.is_available())
+print("devices:", torch.cuda.device_count())
+print("imports OK")
+PY
+```
+
+## 2. Data
+
+Expected data directory:
 
 ```text
-/home/paichichi/data/RH20T/TCC_RH20T/
+TCC_RH20T/
   train/
   manifest.csv
   lookup.csv
@@ -22,81 +62,146 @@ Expected data root:
   training_index.pt
 ```
 
-`training_index.pt` is a local dataset index. It is not committed to GitHub.
-Rebuild it from `tcn_timestamp_groups.csv` with:
+`training_index.pt` is a local dataset index. Do not commit it to GitHub.
+
+If you only have `tcn_timestamp_groups.csv`, rebuild the index:
 
 ```bash
-python scripts/build_universal_matched_group_index.py
+python scripts/build_universal_matched_group_index.py \
+  --index /path/to/TCC_RH20T/tcn_timestamp_groups.csv \
+  --output /path/to/TCC_RH20T/training_index.pt
 ```
 
-## Train
+## 3. Config
 
-Default training arguments already match the current main experiment:
+Main config files:
 
 ```text
-8 timestamps
-4 views
-H/R exact matched camera combo
-unique-task batches when possible
-full 4-view fusion for Soft-DTW
-2-view vs 2-view disjoint subsets for MV-VVCL
+configs/debug_4080s.yaml
+configs/train_2a100.yaml
 ```
 
-Minimal debug run:
+When moving to a new server, update these paths:
+
+```yaml
+data_root: /path/to/TCC_RH20T
+training_index: /path/to/TCC_RH20T/training_index.pt
+pretrain_path: /path/to/D4R_IN_1M.pth
+output_root: /path/to/output_runs
+```
+
+Commonly tuned settings:
+
+```yaml
+batch_pairs: 16
+num_timestamps: 8
+num_multi_view: 4
+lr: 0.000075
+max_iters: 20000
+lambda_mv: 0.5  # If MV-VVCL dominates, try 0.1 first.
+```
+
+`batch_pairs` is per GPU/process. With 2 GPUs, total processed H/R pairs per step is roughly `batch_pairs * 2`.
+
+## 4. Local Debug
+
+Single GPU:
 
 ```bash
-conda run --no-capture-output -n tcc-core \
-  python -u scripts/train_multiview_softdtw.py \
-  --config configs/debug_4080s.json
+python train.py \
+  --exp_cfg_path configs/debug_4080s.yaml \
+  --device 0
 ```
 
-Config values can be overridden from the command line:
+Fast smoke test:
 
 ```bash
-conda run --no-capture-output -n tcc-core \
-  python -u scripts/train_multiview_softdtw.py \
-  --config configs/debug_4080s.json \
-  --out-dir /tmp/tcc-core/multiview_softdtw_runs/smoke \
-  --max-iters 1
+python train.py \
+  --exp_cfg_path configs/debug_4080s.yaml \
+  --device 0 \
+  -- \
+  --batch-pairs 2 \
+  --max-iters 1 \
+  --log-every 1 \
+  --save-every 0
 ```
 
-Useful overrides:
+## 5. Multi-GPU Training
+
+2 GPUs:
 
 ```bash
---batch-pairs 4
---training-index /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
---data-root /home/paichichi/data/RH20T/TCC_RH20T
---num-timestamps 8
---max-views-per-group 4
---lambda-mv 0.5
---temperature 0.1
---gamma 0.1
---device cuda:0
+python train.py \
+  --exp_cfg_path configs/train_2a100.yaml \
+  --device 0,1
 ```
 
-The default matched index path is:
+4 GPUs:
+
+```bash
+python train.py \
+  --exp_cfg_path configs/train_2a100.yaml \
+  --device 0,1,2,3
+```
+
+## 6. Slurm
+
+Edit:
 
 ```text
-/home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
+slurm/train_2a100_nesi.sh
 ```
 
-## Review Export
-
-Export copied-frame folders for visual inspection:
+Main fields to update:
 
 ```bash
-python scripts/export_matched_combo_review_folders.py
+PROJECT_ROOT=/path/to/TCC-core
+ACTIVATE_SCRIPT=/path/to/activate_env.sh
 ```
 
-## Core Files
+Submit one experiment:
+
+```bash
+sbatch slurm/train_2a100_nesi.sh
+```
+
+Submit the 3-job ablation:
+
+```bash
+bash slurm/submit_d4r_ablation_2a100_nesi.sh
+```
+
+## 7. Output
+
+Each run writes to:
 
 ```text
+output_root/run_name/
+  losses.csv
+  checkpoint_001000.pt
+  checkpoint_002000.pt
+  ...
+```
+
+Checkpoint format:
+
+```python
+ckpt = torch.load("checkpoint_001000.pt", map_location="cpu")
+model_state = ckpt["model"]
+args = ckpt["args"]
+```
+
+For RVT transfer, the main object you need is `ckpt["model"]`.
+
+## 8. Core Files
+
+```text
+train.py
 scripts/train_multiview_softdtw.py
-configs/debug_4080s.json
-configs/train_2a100.json
-scripts/build_tcn_timestamp_group_index.py
-scripts/build_universal_matched_group_index.py
-scripts/export_matched_combo_review_folders.py
-xirl/losses.py
 xirl/models.py
+xirl/losses.py
+configs/default.yaml
+configs/debug_4080s.yaml
+configs/train_2a100.yaml
+slurm/train_2a100_nesi.sh
 ```

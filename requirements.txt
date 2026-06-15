@@ -1,4 +1,5 @@
 numpy
 pillow
+pyyaml
 torch
 torchvision
