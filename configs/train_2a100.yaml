@@ -6,12 +6,12 @@
 #   the job processes 32 H/R pairs per step, while contrastive negatives remain
 #   local to each GPU.
 
-data_root: /home/paichichi/data/RH20T/TCC_RH20T
-training_index: /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
-pretrain_path: /home/paichichi/data/pretrain/D4R_IN_1M.pth
-output_root: /tmp/tcc-core/multiview_softdtw_runs
+data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
+training_index: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
+pretrain_path: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/D4R_IN_1M.pth
+output_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/runs/
 
-run_name: train_2a100_lr7p5e5_20k
+run_name: d4rIN_cammatch_8ts4v_bp16x2_mv0p5_sdtwdiv_lr7p5e5_20k_s0
 
 batch_pairs: 16
 num_timestamps: 8
