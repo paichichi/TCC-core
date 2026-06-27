@@ -93,7 +93,7 @@ output_root: /path/to/output_runs
 Commonly tuned settings:
 
 ```yaml
-batch_pairs: 16
+batch_episode_pairs: 16
 num_timestamps: 8
 num_multi_view: 4
 lr: 0.000075
@@ -101,7 +101,7 @@ max_iters: 20000
 lambda_mv: 0.5  # If MV-VVCL dominates, try 0.1 first.
 ```
 
-`batch_pairs` is per GPU/process. With 2 GPUs, total processed H/R pairs per step is roughly `batch_pairs * 2`.
+`batch_episode_pairs` is per GPU/process. With 2 GPUs, total processed H/R episode pairs per step is roughly `batch_episode_pairs * 2`.
 
 ## 4. Local Debug
 
@@ -120,7 +120,7 @@ python train.py \
   --exp_cfg_path configs/debug_4080s.yaml \
   --device 0 \
   -- \
-  --batch-pairs 2 \
+  --batch-episode-pairs 2 \
   --max-iters 1 \
   --log-every 1 \
   --save-every 0

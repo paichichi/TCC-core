@@ -159,6 +159,154 @@ class FixedSlotFusionSoftDTW(nn.Module):
         images, group_indices, subset_indices, camera_ids, num_groups)
 
 
+class ViewSetAttentionSoftDTW(nn.Module):
+  """Frozen ViT backbone + unordered view-set attention pooling."""
+
+  def __init__(
+      self,
+      embedding_size: int,
+      fusion_size: int,
+      pretrain_path: str,
+      train_layernorm: bool = True,
+      view_token_dropout: float = 0.15,
+      view_token_noise_std: float = 0.01,
+      attention_dropout: float = 0.1,
+      projector_dropout: float = 0.1,
+  ):
+    super().__init__()
+    self.view_token_dropout = view_token_dropout
+    self.view_token_noise_std = view_token_noise_std
+    self.attention_dropout = attention_dropout
+    self.backbone = ViTB16Backbone(
+        pretrain_path=pretrain_path,
+        vit_weights="none",
+        pooling="patch_mean",
+    )
+    for param in self.backbone.parameters():
+      param.requires_grad = False
+    if train_layernorm:
+      for module in self.backbone.modules():
+        if isinstance(module, nn.LayerNorm):
+          for param in module.parameters():
+            param.requires_grad = True
+
+    self.view_projector = nn.Sequential(
+        nn.LayerNorm(self.backbone.output_dim),
+        nn.Linear(self.backbone.output_dim, fusion_size),
+        nn.GELU(),
+        nn.Linear(fusion_size, fusion_size),
+        nn.GELU(),
+    )
+    self.view_norm = nn.LayerNorm(fusion_size)
+    self.query = nn.Parameter(torch.randn(fusion_size) * 0.02)
+    self.pooled_norm = nn.LayerNorm(fusion_size)
+    self.projector_sdtw = nn.Linear(fusion_size, embedding_size)
+    self.projector_aux = nn.Sequential(
+        nn.Dropout(projector_dropout),
+        nn.Linear(fusion_size, embedding_size),
+    )
+
+  def _pack_view_tokens(
+      self,
+      tokens_flat: torch.Tensor,
+      group_indices: torch.Tensor,
+      num_groups: int,
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    counts = torch.bincount(group_indices, minlength=num_groups)
+    max_views = int(counts.max().item())
+    tokens = tokens_flat.new_zeros((num_groups, max_views, tokens_flat.shape[-1]))
+    mask = torch.zeros(
+        (num_groups, max_views),
+        dtype=torch.bool,
+        device=tokens_flat.device,
+    )
+    order = torch.argsort(group_indices)
+    sorted_groups = group_indices[order]
+    sorted_tokens = tokens_flat[order]
+    group_starts = torch.cumsum(counts, dim=0) - counts
+    positions = (
+        torch.arange(sorted_groups.shape[0], device=tokens_flat.device)
+        - group_starts[sorted_groups]
+    )
+    tokens[sorted_groups, positions] = sorted_tokens
+    mask[sorted_groups, positions] = True
+    return tokens, mask
+
+  def encode_view_tokens(
+      self,
+      images: torch.Tensor,
+      group_indices: torch.Tensor,
+      num_groups: int,
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    feats = self.backbone(images)
+    feats = torch.flatten(feats, 1)
+    tokens_flat = self.view_norm(self.view_projector(feats))
+    return self._pack_view_tokens(tokens_flat, group_indices, num_groups)
+
+  def augment_view_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+    out = tokens
+    if self.training and self.view_token_dropout > 0:
+      out = F.dropout(out, p=self.view_token_dropout, training=True)
+    if self.training and self.view_token_noise_std > 0:
+      out = out + torch.randn_like(out) * self.view_token_noise_std
+    return out
+
+  def attention_pool(
+      self,
+      tokens: torch.Tensor,
+      mask: torch.Tensor,
+      apply_dropout: bool,
+  ) -> torch.Tensor:
+    scale = tokens.shape[-1] ** -0.5
+    scores = (tokens * self.query).sum(dim=-1) * scale
+    scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+    weights = F.softmax(scores, dim=-1)
+    weights = weights.masked_fill(~mask, 0.0)
+    if self.training and apply_dropout and self.attention_dropout > 0:
+      dropped = F.dropout(weights, p=self.attention_dropout, training=True)
+      denom = dropped.sum(dim=-1, keepdim=True)
+      weights = torch.where(denom > 0, dropped / denom.clamp_min(1e-6), weights)
+    pooled = (weights.unsqueeze(-1) * tokens).sum(dim=1)
+    return self.pooled_norm(pooled)
+
+  def encode_groups(
+      self,
+      images: torch.Tensor,
+      group_indices: torch.Tensor,
+      camera_ids: torch.Tensor,
+      num_groups: int,
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    del camera_ids
+    tokens, mask = self.encode_view_tokens(images, group_indices, num_groups)
+    pooled = self.attention_pool(tokens, mask, apply_dropout=False)
+    z_sdtw = self.projector_sdtw(pooled)
+    z_aux = self.projector_aux(pooled)
+    return F.normalize(z_sdtw, dim=-1), F.normalize(z_aux, dim=-1)
+
+  def forward(
+      self,
+      images: torch.Tensor,
+      group_indices: torch.Tensor,
+      camera_ids: torch.Tensor,
+      num_groups: int,
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    del camera_ids
+    tokens, mask = self.encode_view_tokens(images, group_indices, num_groups)
+    clean = self.attention_pool(tokens, mask, apply_dropout=False)
+    aug_a = self.attention_pool(
+        self.augment_view_tokens(tokens), mask, apply_dropout=True)
+    aug_b = self.attention_pool(
+        self.augment_view_tokens(tokens), mask, apply_dropout=True)
+    z_sdtw = self.projector_sdtw(clean)
+    z_aux_a = self.projector_aux(aug_a)
+    z_aux_b = self.projector_aux(aug_b)
+    return (
+        F.normalize(z_sdtw, dim=-1),
+        F.normalize(z_aux_a, dim=-1),
+        F.normalize(z_aux_b, dim=-1),
+    )
+
+
 def load_config(path: Path) -> dict:
   with path.open("r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -170,7 +318,10 @@ def load_config(path: Path) -> dict:
 
 
 def normalize_config_keys(config: dict) -> dict:
-  return {key.replace("-", "_"): value for key, value in config.items()}
+  normalized = {key.replace("-", "_"): value for key, value in config.items()}
+  if "batch_pairs" in normalized and "batch_episode_pairs" not in normalized:
+    normalized["batch_episode_pairs"] = normalized.pop("batch_pairs")
+  return normalized
 
 
 def coerce_path_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -220,7 +371,13 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
       type=int,
       help="Number of timestamp-aligned camera views used per group.",
   )
-  parser.add_argument("--batch-pairs", type=int)
+  parser.add_argument(
+      "--batch-episode-pairs",
+      "--batch-pairs",
+      dest="batch_episode_pairs",
+      type=int,
+      help="Number of episode-level H/R pairs sampled per GPU/process.",
+  )
   parser.add_argument("--max-iters", type=int)
   parser.add_argument("--log-every", type=int)
   parser.add_argument("--save-every", type=int)
@@ -232,8 +389,26 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
       dest="softdtw_divergence",
       default=argparse.SUPPRESS,
   )
+  parser.add_argument(
+      "--softdtw-mode",
+      choices=("contrastive", "paired"),
+      help=(
+          "contrastive computes the full H/R batch distance matrix; paired "
+          "only aligns each episode-level H/R pair."
+      ),
+  )
   parser.add_argument("--lambda-mv", type=float)
   parser.add_argument("--mv-temperature", type=float)
+  parser.add_argument(
+      "--mv-soft-temporal",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help=(
+          "Use timestamp-index soft targets for auxiliary multi-view InfoNCE."
+      ),
+  )
+  parser.add_argument("--mv-soft-temporal-alpha", type=float)
+  parser.add_argument("--mv-soft-temporal-tau", type=float)
   parser.add_argument(
       "--camera-matched-pairing",
       action=argparse.BooleanOptionalAction,
@@ -251,7 +426,19 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   parser.add_argument("--device")
   parser.add_argument("--embedding-size", type=int)
   parser.add_argument("--fusion-size", type=int)
+  parser.add_argument(
+      "--fusion-mode",
+      choices=("fixed_slot", "attention_pool"),
+      help=(
+          "Fusion module. fixed_slot uses camera-id slots; attention_pool "
+          "treats sampled views as an unordered set and ignores camera ids."
+      ),
+  )
   parser.add_argument("--num-camera-slots", type=int)
+  parser.add_argument("--view-token-dropout", type=float)
+  parser.add_argument("--view-token-noise-std", type=float)
+  parser.add_argument("--attention-dropout", type=float)
+  parser.add_argument("--projector-dropout", type=float)
   parser.add_argument("--pretrain-path")
   parser.add_argument(
       "--amp",
@@ -300,6 +487,24 @@ def parse_args() -> argparse.Namespace:
       raise ValueError(
           "Config must provide either out_dir or both output_root and run_name.")
     args.out_dir = args.output_root / args.run_name
+  if not hasattr(args, "fusion_mode"):
+    args.fusion_mode = "fixed_slot"
+  if not hasattr(args, "softdtw_mode"):
+    args.softdtw_mode = "contrastive"
+  if not hasattr(args, "mv_soft_temporal"):
+    args.mv_soft_temporal = False
+  if not hasattr(args, "mv_soft_temporal_alpha"):
+    args.mv_soft_temporal_alpha = 0.2
+  if not hasattr(args, "mv_soft_temporal_tau"):
+    args.mv_soft_temporal_tau = 1.0
+  if not hasattr(args, "view_token_dropout"):
+    args.view_token_dropout = 0.15
+  if not hasattr(args, "view_token_noise_std"):
+    args.view_token_noise_std = 0.01
+  if not hasattr(args, "attention_dropout"):
+    args.attention_dropout = 0.1
+  if not hasattr(args, "projector_dropout"):
+    args.projector_dropout = 0.1
   return coerce_path_args(args)
 
 
@@ -643,24 +848,26 @@ def infer_num_camera_slots(paired_tracks: dict[str, dict]) -> int:
 def sample_episode_batch(
     episode_ids: list[str],
     task_to_episodes: dict[str, list[str]],
-    batch_pairs: int,
+    batch_episode_pairs: int,
     prefer_distinct_tasks: bool,
     rng: random.Random,
 ) -> list[str]:
   if not prefer_distinct_tasks:
-    return rng.sample(episode_ids, batch_pairs)
+    return rng.sample(episode_ids, batch_episode_pairs)
   task_ids = [task_id for task_id, eps in task_to_episodes.items() if eps]
-  selected_tasks = rng.sample(task_ids, min(batch_pairs, len(task_ids)))
+  selected_tasks = rng.sample(
+      task_ids, min(batch_episode_pairs, len(task_ids)))
   selected = [rng.choice(task_to_episodes[task_id]) for task_id in selected_tasks]
-  if len(selected) >= batch_pairs:
+  if len(selected) >= batch_episode_pairs:
     return selected
 
   selected_set = set(selected)
   remaining = [episode_id for episode_id in episode_ids if episode_id not in selected_set]
   rng.shuffle(remaining)
-  selected.extend(remaining[:batch_pairs - len(selected)])
-  if len(selected) < batch_pairs:
-    selected.extend(rng.choices(episode_ids, k=batch_pairs - len(selected)))
+  selected.extend(remaining[:batch_episode_pairs - len(selected)])
+  if len(selected) < batch_episode_pairs:
+    selected.extend(
+        rng.choices(episode_ids, k=batch_episode_pairs - len(selected)))
   return selected
 
 
@@ -948,6 +1155,52 @@ def compute_multiview_infonce(
   }
 
 
+def compute_soft_temporal_infonce(
+    z_a,
+    z_b,
+    num_sequences,
+    num_timestamps,
+    temperature,
+    alpha,
+    tau,
+):
+  expected = num_sequences * num_timestamps
+  if z_a.shape[0] != expected or z_b.shape[0] != expected:
+    raise ValueError(
+        f"Expected {expected} embeddings, got {z_a.shape[0]} and {z_b.shape[0]}.")
+  if tau <= 0:
+    raise ValueError("--mv-soft-temporal-tau must be > 0.")
+  if alpha < 0 or alpha > 1:
+    raise ValueError("--mv-soft-temporal-alpha must be in [0, 1].")
+
+  logits = (z_a @ z_b.t()) / temperature
+  sequence_ids = torch.arange(expected, device=z_a.device) // num_timestamps
+  positions = torch.arange(expected, device=z_a.device) % num_timestamps
+  same_sequence = sequence_ids[:, None] == sequence_ids[None]
+  temporal_dist = (positions[:, None] - positions[None]).abs().float()
+  temporal_target = torch.exp(-temporal_dist / tau)
+  temporal_target = temporal_target.masked_fill(~same_sequence, 0.0)
+  temporal_target = temporal_target / temporal_target.sum(dim=1, keepdim=True)
+  hard_target = torch.eye(expected, device=z_a.device, dtype=z_a.dtype)
+  target = (1.0 - alpha) * hard_target + alpha * temporal_target.to(z_a.dtype)
+
+  loss_ab = -(target * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
+  loss_ba = -(target * F.log_softmax(logits.t(), dim=1)).sum(dim=1).mean()
+  loss = 0.5 * (loss_ab + loss_ba)
+
+  sims = z_a @ z_b.t()
+  labels = torch.arange(expected, device=z_a.device)
+  top1_ab = (sims.argmax(dim=1) == labels).float().mean()
+  top1_ba = (sims.argmax(dim=0) == labels).float().mean()
+  diag = sims.diag().mean()
+  off = (sims.sum() - sims.diag().sum()) / max(1, sims.numel() - expected)
+  return loss, {
+      "top1": 0.5 * (top1_ab + top1_ba),
+      "diag": diag,
+      "off": off,
+  }
+
+
 def trainable_summary(model):
   total = sum(p.numel() for p in model.parameters())
   trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -1018,29 +1271,52 @@ def main() -> None:
     )
   episode_ids = sorted(paired_tracks, key=lambda x: int(x))
   task_to_episodes = build_task_to_episodes(paired_tracks)
-  if len(episode_ids) < args.batch_pairs:
+  if len(episode_ids) < args.batch_episode_pairs:
     raise RuntimeError("Not enough paired episode tracks.")
-  if not hasattr(args, "num_camera_slots") or args.num_camera_slots is None:
+  if (
+      args.fusion_mode == "fixed_slot"
+      and (not hasattr(args, "num_camera_slots") or args.num_camera_slots is None)
+  ):
     args.num_camera_slots = infer_num_camera_slots(paired_tracks)
   if is_main:
+    num_camera_slots = getattr(args, "num_camera_slots", None)
     print(
         f"loaded paired_episodes={len(episode_ids)} "
         f"tasks={len(task_to_episodes)} "
         f"num_timestamps={args.num_timestamps} "
         f"num_multi_view={args.num_multi_view} "
-        f"num_camera_slots={args.num_camera_slots} "
+        f"fusion_mode={args.fusion_mode} "
+        f"softdtw_mode={args.softdtw_mode} "
+        f"mv_soft_temporal={args.mv_soft_temporal} "
+        f"mv_soft_temporal_alpha={args.mv_soft_temporal_alpha} "
+        f"mv_soft_temporal_tau={args.mv_soft_temporal_tau} "
+        f"num_camera_slots={num_camera_slots} "
         f"camera_matched_pairing={args.camera_matched_pairing} "
         f"world_size={world_size} "
         f"training_index={args.training_index}")
 
   transform = make_transform(args.image_size)
-  raw_model = FixedSlotFusionSoftDTW(
-      num_camera_slots=args.num_camera_slots,
-      embedding_size=args.embedding_size,
-      fusion_size=args.fusion_size,
-      pretrain_path=args.pretrain_path,
-      train_layernorm=True,
-  ).to(device).train()
+  if args.fusion_mode == "fixed_slot":
+    raw_model = FixedSlotFusionSoftDTW(
+        num_camera_slots=args.num_camera_slots,
+        embedding_size=args.embedding_size,
+        fusion_size=args.fusion_size,
+        pretrain_path=args.pretrain_path,
+        train_layernorm=True,
+    ).to(device).train()
+  elif args.fusion_mode == "attention_pool":
+    raw_model = ViewSetAttentionSoftDTW(
+        embedding_size=args.embedding_size,
+        fusion_size=args.fusion_size,
+        pretrain_path=args.pretrain_path,
+        train_layernorm=True,
+        view_token_dropout=args.view_token_dropout,
+        view_token_noise_std=args.view_token_noise_std,
+        attention_dropout=args.attention_dropout,
+        projector_dropout=args.projector_dropout,
+    ).to(device).train()
+  else:
+    raise ValueError(f"Unknown fusion_mode: {args.fusion_mode}")
   if is_main:
     print(trainable_summary(raw_model))
   if distributed:
@@ -1080,7 +1356,7 @@ def main() -> None:
         "aux_diag_r",
         "aux_off_r",
         "emb_std",
-        "batch_pairs",
+        "batch_episode_pairs",
         "images",
         "seconds",
         "cuda_mem_mb",
@@ -1093,7 +1369,7 @@ def main() -> None:
       batch_episode_ids = sample_episode_batch(
           episode_ids,
           task_to_episodes,
-          args.batch_pairs,
+          args.batch_episode_pairs,
           True,
           rng,
       )
@@ -1135,41 +1411,120 @@ def main() -> None:
         robot_sequences.append(
             stratified_group_sample(r_groups, args.num_timestamps, rng))
       all_sequences = human_sequences + robot_sequences
-      subset_sequences = make_view_dropout_sequences(
-          all_sequences,
-          args.num_multi_view,
-          keep_ratio=0.75,
-          disjoint=True,
-          rng=rng,
-      )
-      images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
-          args.data_root, subset_sequences, transform, device)
+      if args.fusion_mode == "fixed_slot":
+        subset_sequences = make_view_dropout_sequences(
+            all_sequences,
+            args.num_multi_view,
+            keep_ratio=0.75,
+            disjoint=True,
+            rng=rng,
+        )
+        images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
+            args.data_root, subset_sequences, transform, device)
+      elif args.fusion_mode == "attention_pool":
+        images, group_idx, camera_ids, num_groups = prepare_batch_images(
+            args.data_root, all_sequences, transform, device)
+      else:
+        raise ValueError(f"Unknown fusion_mode: {args.fusion_mode}")
 
       optimizer.zero_grad(set_to_none=True)
       with torch.amp.autocast(
           "cuda", enabled=args.amp and device.type == "cuda"):
-        z_groups, _, z_subsets_aux = model(
-            images, group_idx, subset_idx, camera_ids, num_groups)
-        z = z_groups.reshape(2 * args.batch_pairs, args.num_timestamps, -1)
-        h_seq = z[:args.batch_pairs]
-        r_seq = z[args.batch_pairs:]
-        loss_softdtw, metrics = compute_softdtw_contrastive(
-            h_seq,
-            r_seq,
-            gamma=args.gamma,
-            temperature=args.temperature,
-            softdtw_divergence=args.softdtw_divergence,
-        )
-        z_sub = z_subsets_aux.reshape(
-            2 * args.batch_pairs, args.num_timestamps, 2, -1)
-        h_sub = z_sub[:args.batch_pairs].reshape(
-            args.batch_pairs * args.num_timestamps, 2, -1)
-        r_sub = z_sub[args.batch_pairs:].reshape(
-            args.batch_pairs * args.num_timestamps, 2, -1)
-        loss_aux_h, aux_h = compute_multiview_infonce(
-            h_sub[:, 0], h_sub[:, 1], args.mv_temperature)
-        loss_aux_r, aux_r = compute_multiview_infonce(
-            r_sub[:, 0], r_sub[:, 1], args.mv_temperature)
+        if args.fusion_mode == "fixed_slot":
+          z_groups, _, z_subsets_aux = model(
+              images, group_idx, subset_idx, camera_ids, num_groups)
+        else:
+          z_groups, z_aux_a, z_aux_b = model(
+              images, group_idx, camera_ids, num_groups)
+        z = z_groups.reshape(
+            2 * args.batch_episode_pairs, args.num_timestamps, -1)
+        h_seq = z[:args.batch_episode_pairs]
+        r_seq = z[args.batch_episode_pairs:]
+        if args.softdtw_mode == "contrastive":
+          loss_softdtw, metrics = compute_softdtw_contrastive(
+              h_seq,
+              r_seq,
+              gamma=args.gamma,
+              temperature=args.temperature,
+              softdtw_divergence=args.softdtw_divergence,
+          )
+        elif args.softdtw_mode == "paired":
+          loss_softdtw, metrics = compute_softdtw_paired(
+              h_seq,
+              r_seq,
+              gamma=args.gamma,
+              softdtw_divergence=args.softdtw_divergence,
+          )
+        else:
+          raise ValueError(f"Unknown softdtw_mode: {args.softdtw_mode}")
+        if args.fusion_mode == "fixed_slot":
+          z_sub = z_subsets_aux.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, 2, -1)
+          h_sub = z_sub[:args.batch_episode_pairs].reshape(
+              args.batch_episode_pairs * args.num_timestamps, 2, -1)
+          r_sub = z_sub[args.batch_episode_pairs:].reshape(
+              args.batch_episode_pairs * args.num_timestamps, 2, -1)
+          if args.mv_soft_temporal:
+            loss_aux_h, aux_h = compute_soft_temporal_infonce(
+                h_sub[:, 0],
+                h_sub[:, 1],
+                args.batch_episode_pairs,
+                args.num_timestamps,
+                args.mv_temperature,
+                args.mv_soft_temporal_alpha,
+                args.mv_soft_temporal_tau,
+            )
+            loss_aux_r, aux_r = compute_soft_temporal_infonce(
+                r_sub[:, 0],
+                r_sub[:, 1],
+                args.batch_episode_pairs,
+                args.num_timestamps,
+                args.mv_temperature,
+                args.mv_soft_temporal_alpha,
+                args.mv_soft_temporal_tau,
+            )
+          else:
+            loss_aux_h, aux_h = compute_multiview_infonce(
+                h_sub[:, 0], h_sub[:, 1], args.mv_temperature)
+            loss_aux_r, aux_r = compute_multiview_infonce(
+                r_sub[:, 0], r_sub[:, 1], args.mv_temperature)
+        else:
+          z_aux_a = z_aux_a.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          z_aux_b = z_aux_b.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          h_aux_a = z_aux_a[:args.batch_episode_pairs].reshape(
+              args.batch_episode_pairs * args.num_timestamps, -1)
+          h_aux_b = z_aux_b[:args.batch_episode_pairs].reshape(
+              args.batch_episode_pairs * args.num_timestamps, -1)
+          r_aux_a = z_aux_a[args.batch_episode_pairs:].reshape(
+              args.batch_episode_pairs * args.num_timestamps, -1)
+          r_aux_b = z_aux_b[args.batch_episode_pairs:].reshape(
+              args.batch_episode_pairs * args.num_timestamps, -1)
+          if args.mv_soft_temporal:
+            loss_aux_h, aux_h = compute_soft_temporal_infonce(
+                h_aux_a,
+                h_aux_b,
+                args.batch_episode_pairs,
+                args.num_timestamps,
+                args.mv_temperature,
+                args.mv_soft_temporal_alpha,
+                args.mv_soft_temporal_tau,
+            )
+            loss_aux_r, aux_r = compute_soft_temporal_infonce(
+                r_aux_a,
+                r_aux_b,
+                args.batch_episode_pairs,
+                args.num_timestamps,
+                args.mv_temperature,
+                args.mv_soft_temporal_alpha,
+                args.mv_soft_temporal_tau,
+            )
+          else:
+            loss_aux_h, aux_h = compute_multiview_infonce(
+                h_aux_a, h_aux_b, args.mv_temperature)
+            loss_aux_r, aux_r = compute_multiview_infonce(
+                r_aux_a, r_aux_b, args.mv_temperature)
         loss_aux = 0.5 * (loss_aux_h + loss_aux_r)
         loss = loss_softdtw + args.lambda_mv * loss_aux
       scaler.scale(loss).backward()
@@ -1198,7 +1553,7 @@ def main() -> None:
           f"{aux_r['diag'].item():.6f}",
           f"{aux_r['off'].item():.6f}",
           f"{emb_std:.8f}",
-          args.batch_pairs,
+          args.batch_episode_pairs,
           images.shape[0],
           f"{seconds:.4f}",
           f"{mem_mb:.1f}",
@@ -1211,7 +1566,8 @@ def main() -> None:
             f"aux_top1_h/r={row[9]}/{row[10]} "
             f"aux_diag_off_h={row[11]}/{row[12]} "
             f"aux_diag_off_r={row[13]}/{row[14]} "
-            f"emb_std={row[15]} pairs={args.batch_pairs} imgs={images.shape[0]} "
+            f"emb_std={row[15]} episode_pairs={args.batch_episode_pairs} "
+            f"imgs={images.shape[0]} "
             f"mem={row[19]}MB sec={row[18]}",
             flush=True,
         )

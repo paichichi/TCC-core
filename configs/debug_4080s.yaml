@@ -8,7 +8,7 @@ output_root: /tmp/tcc-core/multiview_softdtw_runs
 
 run_name: debug_4080s
 
-batch_pairs: 4
+batch_episode_pairs: 4
 num_timestamps: 8
 num_multi_view: 4
 camera_matched_pairing: true

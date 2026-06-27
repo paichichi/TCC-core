@@ -2,7 +2,8 @@
 #   python train.py --exp_cfg_path configs/train_2a100.yaml --device 0,1
 #
 # DDP note:
-#   batch_pairs is per GPU/process. With --device 0,1 and batch_pairs=16,
+#   batch_episode_pairs is per GPU/process. With --device 0,1 and
+#   batch_episode_pairs=16,
 #   the job processes 32 H/R pairs per step, while contrastive negatives remain
 #   local to each GPU.
 
@@ -13,7 +14,7 @@ output_root: /tmp/tcc-core/multiview_softdtw_runs
 
 run_name: train_2a100_lr7p5e5_20k
 
-batch_pairs: 16
+batch_episode_pairs: 16
 num_timestamps: 8
 num_multi_view: 4
 camera_matched_pairing: true

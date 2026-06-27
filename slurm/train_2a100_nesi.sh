@@ -18,7 +18,7 @@ ACTIVATE_SCRIPT=/nesi/project/uoa04758/xzha593/envs/activate_hralign.sh
 RUN_NAME=${RUN_NAME:-train_2a100_lr7p5e5_20k}
 NUM_TIMESTAMPS=${NUM_TIMESTAMPS:-8}
 NUM_MULTI_VIEW=${NUM_MULTI_VIEW:-4}
-BATCH_PAIRS=${BATCH_PAIRS:-16}
+BATCH_EPISODE_PAIRS=${BATCH_EPISODE_PAIRS:-${BATCH_PAIRS:-16}}
 LR=${LR:-0.000075}
 MAX_ITERS=${MAX_ITERS:-20000}
 LOG_EVERY=${LOG_EVERY:-10}
@@ -43,7 +43,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "RUN_NAME=${RUN_NAME}"
 echo "NUM_TIMESTAMPS=${NUM_TIMESTAMPS}"
 echo "NUM_MULTI_VIEW=${NUM_MULTI_VIEW}"
-echo "BATCH_PAIRS=${BATCH_PAIRS}"
+echo "BATCH_EPISODE_PAIRS=${BATCH_EPISODE_PAIRS}"
 echo "LR=${LR}"
 echo "MAX_ITERS=${MAX_ITERS}"
 echo "TRAIN_DEVICES=${DEVICES}"
@@ -57,7 +57,7 @@ python train.py \
   --run-name "${RUN_NAME}" \
   --num-timestamps "${NUM_TIMESTAMPS}" \
   --num-multi-view "${NUM_MULTI_VIEW}" \
-  --batch-pairs "${BATCH_PAIRS}" \
+  --batch-episode-pairs "${BATCH_EPISODE_PAIRS}" \
   --lr "${LR}" \
   --max-iters "${MAX_ITERS}" \
   --log-every "${LOG_EVERY}" \
