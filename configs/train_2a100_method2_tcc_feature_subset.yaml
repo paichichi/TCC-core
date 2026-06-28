@@ -1,25 +1,24 @@
 # Launch:
-#   python train.py --exp_cfg_path configs/train_2a100_method2.yaml --device 0,1
+#   python train.py --exp_cfg_path configs/train_2a100_method2_tcc_feature_subset.yaml --device 0,1
 #
-# Method 2:
-#   Ignore camera-id slots. Fuse the sampled views as an unordered view set with
-#   attention pooling. Joint-view temporal alignment uses clean full-view
-#   embeddings. Auxiliary CL trains the fusion head with clean full-view
-#   embeddings versus weakly augmented, stochastic masked-view embeddings.
+# Lightweight Method 2 TCC ablation:
+#   One clean backbone pass only. Auxiliary CL trains the fusion head with
+#   full-view fused embeddings versus feature-level stochastic subset fused
+#   embeddings. Temporal alignment uses paired official-style TCC cycle-back.
 
 data_root: /home/paichichi/data/RH20T/TCC_RH20T
 training_index: /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
 pretrain_path: /home/paichichi/data/pretrain/D4R_IN_1M.pth
 output_root: /tmp/tcc-core/multiview_softdtw_runs
 
-run_name: train_2a100_method2_full_clean_augmask_lr7p5e5_20k
+run_name: train_2a100_method2_tcc_feature_subset_lr7p5e5_20k
 
 fusion_mode: attention_pool
 view_token_dropout: 0.15
 view_token_noise_std: 0.01
 attention_dropout: 0.1
 projector_dropout: 0.1
-pixel_aug: true
+pixel_aug: false
 view_mask_mode: drop_one
 view_mask_prob: 0.5
 view_mask_min_views: 3
@@ -33,10 +32,15 @@ gamma: 0.1
 temperature: 0.1
 mv_temperature: 0.1
 lambda_mv: 0.5
-mv_soft_temporal: true  # Soft labels are only applied within each episode sequence, not across episodes.
+mv_soft_temporal: true
 mv_soft_temporal_alpha: 0.2
 mv_soft_temporal_tau: 1.0
-softdtw_mode: contrastive  # Use BxB H/R sequence negatives for joint-view temporal alignment.
+softdtw_mode: tcc
+tcc_loss_type: regression_mse
+tcc_similarity_type: l2
+tcc_label_smoothing: 0.1
+tcc_variance_lambda: 0.001
+tcc_huber_delta: 0.1
 softdtw_divergence: true
 
 lr: 0.000075

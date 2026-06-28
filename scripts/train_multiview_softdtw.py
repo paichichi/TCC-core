@@ -24,7 +24,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torchvision import transforms
 
 from xirl.losses import soft_dtw_sequence_distance
-from xirl.models import ViTB16Backbone
+from xirl.models import build_backbone
 
 
 PATH_ARG_NAMES = {
@@ -62,22 +62,18 @@ class FixedSlotFusionSoftDTW(nn.Module):
       embedding_size: int,
       fusion_size: int,
       pretrain_path: str,
+      backbone: str = "vit_b16",
       train_layernorm: bool = True,
+      train_adapters: bool = False,
   ):
     super().__init__()
     self.num_camera_slots = num_camera_slots
-    self.backbone = ViTB16Backbone(
+    self.backbone = build_backbone(
+        backbone=backbone,
         pretrain_path=pretrain_path,
-        vit_weights="none",
-        pooling="patch_mean",
+        train_norm_affine=train_layernorm,
+        train_adapters=train_adapters,
     )
-    for param in self.backbone.parameters():
-      param.requires_grad = False
-    if train_layernorm:
-      for module in self.backbone.modules():
-        if isinstance(module, nn.LayerNorm):
-          for param in module.parameters():
-            param.requires_grad = True
 
     input_dim = num_camera_slots * self.backbone.output_dim + num_camera_slots
     self.fusion = nn.Sequential(
@@ -167,7 +163,9 @@ class ViewSetAttentionSoftDTW(nn.Module):
       embedding_size: int,
       fusion_size: int,
       pretrain_path: str,
+      backbone: str = "vit_b16",
       train_layernorm: bool = True,
+      train_adapters: bool = False,
       view_token_dropout: float = 0.15,
       view_token_noise_std: float = 0.01,
       attention_dropout: float = 0.1,
@@ -177,18 +175,12 @@ class ViewSetAttentionSoftDTW(nn.Module):
     self.view_token_dropout = view_token_dropout
     self.view_token_noise_std = view_token_noise_std
     self.attention_dropout = attention_dropout
-    self.backbone = ViTB16Backbone(
+    self.backbone = build_backbone(
+        backbone=backbone,
         pretrain_path=pretrain_path,
-        vit_weights="none",
-        pooling="patch_mean",
+        train_norm_affine=train_layernorm,
+        train_adapters=train_adapters,
     )
-    for param in self.backbone.parameters():
-      param.requires_grad = False
-    if train_layernorm:
-      for module in self.backbone.modules():
-        if isinstance(module, nn.LayerNorm):
-          for param in module.parameters():
-            param.requires_grad = True
 
     self.view_projector = nn.Sequential(
         nn.LayerNorm(self.backbone.output_dim),
@@ -269,6 +261,29 @@ class ViewSetAttentionSoftDTW(nn.Module):
     pooled = (weights.unsqueeze(-1) * tokens).sum(dim=1)
     return self.pooled_norm(pooled)
 
+  def sample_feature_view_mask(
+      self,
+      mask: torch.Tensor,
+      mode: str,
+      mask_prob: float,
+      min_views: int,
+  ) -> torch.Tensor:
+    if (not self.training) or mode == "none" or mask_prob <= 0:
+      return mask
+    if mode != "drop_one":
+      raise ValueError(f"Unknown feature view mask mode: {mode}")
+    out = mask.clone()
+    keep_min = max(1, min_views)
+    for group_idx in range(out.shape[0]):
+      valid = torch.nonzero(out[group_idx], as_tuple=False).flatten()
+      if valid.numel() <= keep_min:
+        continue
+      if torch.rand((), device=out.device) >= mask_prob:
+        continue
+      drop_pos = torch.randint(valid.numel(), (1,), device=out.device)
+      out[group_idx, valid[drop_pos]] = False
+    return out
+
   def encode_groups(
       self,
       images: torch.Tensor,
@@ -289,21 +304,49 @@ class ViewSetAttentionSoftDTW(nn.Module):
       group_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
+      aug_images: torch.Tensor | None = None,
+      aug_group_indices: torch.Tensor | None = None,
+      aug_camera_ids: torch.Tensor | None = None,
+      aug_num_groups: int | None = None,
+      feature_view_mask_mode: str = "none",
+      feature_view_mask_prob: float = 0.0,
+      feature_view_mask_min_views: int = 1,
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     del camera_ids
     tokens, mask = self.encode_view_tokens(images, group_indices, num_groups)
     clean = self.attention_pool(tokens, mask, apply_dropout=False)
-    aug_a = self.attention_pool(
-        self.augment_view_tokens(tokens), mask, apply_dropout=True)
-    aug_b = self.attention_pool(
-        self.augment_view_tokens(tokens), mask, apply_dropout=True)
     z_sdtw = self.projector_sdtw(clean)
-    z_aux_a = self.projector_aux(aug_a)
-    z_aux_b = self.projector_aux(aug_b)
+    z_aux_clean = self.projector_aux(clean)
+    if aug_images is None:
+      if feature_view_mask_mode == "none":
+        aug_a = self.attention_pool(
+            self.augment_view_tokens(tokens), mask, apply_dropout=True)
+        aug_b = self.attention_pool(
+            self.augment_view_tokens(tokens), mask, apply_dropout=True)
+        z_aux_clean = self.projector_aux(aug_a)
+        z_aux_aug = self.projector_aux(aug_b)
+      else:
+        aug_mask = self.sample_feature_view_mask(
+            mask,
+            feature_view_mask_mode,
+            feature_view_mask_prob,
+            feature_view_mask_min_views,
+        )
+        aug = self.attention_pool(
+            self.augment_view_tokens(tokens), aug_mask, apply_dropout=True)
+        z_aux_aug = self.projector_aux(aug)
+    else:
+      if aug_group_indices is None or aug_num_groups is None:
+        raise ValueError("Augmented view-set inputs require group indices.")
+      del aug_camera_ids
+      aug_tokens, aug_mask = self.encode_view_tokens(
+          aug_images, aug_group_indices, aug_num_groups)
+      aug = self.attention_pool(aug_tokens, aug_mask, apply_dropout=True)
+      z_aux_aug = self.projector_aux(aug)
     return (
         F.normalize(z_sdtw, dim=-1),
-        F.normalize(z_aux_a, dim=-1),
-        F.normalize(z_aux_b, dim=-1),
+        F.normalize(z_aux_clean, dim=-1),
+        F.normalize(z_aux_aug, dim=-1),
     )
 
 
@@ -391,10 +434,10 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   )
   parser.add_argument(
       "--softdtw-mode",
-      choices=("contrastive", "paired"),
+      choices=("contrastive", "paired", "tcc"),
       help=(
           "contrastive computes the full H/R batch distance matrix; paired "
-          "only aligns each episode-level H/R pair."
+          "only aligns each episode-level H/R pair; tcc uses paired cycle-back."
       ),
   )
   parser.add_argument("--lambda-mv", type=float)
@@ -409,6 +452,22 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   )
   parser.add_argument("--mv-soft-temporal-alpha", type=float)
   parser.add_argument("--mv-soft-temporal-tau", type=float)
+  parser.add_argument(
+      "--tcc-loss-type",
+      choices=(
+          "classification",
+          "regression_mse",
+          "regression_mse_var",
+          "regression_huber",
+      ),
+  )
+  parser.add_argument(
+      "--tcc-similarity-type",
+      choices=("l2", "cosine"),
+  )
+  parser.add_argument("--tcc-label-smoothing", type=float)
+  parser.add_argument("--tcc-variance-lambda", type=float)
+  parser.add_argument("--tcc-huber-delta", type=float)
   parser.add_argument(
       "--camera-matched-pairing",
       action=argparse.BooleanOptionalAction,
@@ -439,6 +498,46 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   parser.add_argument("--view-token-noise-std", type=float)
   parser.add_argument("--attention-dropout", type=float)
   parser.add_argument("--projector-dropout", type=float)
+  parser.add_argument(
+      "--pixel-aug",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help="Use weak pixel-level augmentation for the auxiliary fused CL branch.",
+  )
+  parser.add_argument(
+      "--view-mask-mode",
+      choices=("none", "drop_one"),
+      help="Stochastic view masking for the augmented fused CL branch.",
+  )
+  parser.add_argument("--view-mask-prob", type=float)
+  parser.add_argument("--view-mask-min-views", type=int)
+  parser.add_argument(
+      "--backbone",
+      choices=(
+          "vit_b16",
+          "vit",
+          "r3m_resnet50",
+          "r3m",
+          "unadapted_r3m",
+          "r3m_late_adapter",
+          "r3m_adapter",
+          "r3m_hralign_style",
+          "r3m_align_l",
+          "hralign_r3m_l",
+          "adapted_r3m",
+      ),
+      help=(
+          "Visual backbone. r3m_resnet50 uses original R3M without adapters; "
+          "r3m_late_adapter inserts trainable HR-Align-style late adapters "
+          "on original R3M; r3m_align_l loads AdaptedR3M.pyth."
+      ),
+  )
+  parser.add_argument(
+      "--train-backbone-adapters",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help="Also fine-tune HR-Align late adapter weights for R3M backbones.",
+  )
   parser.add_argument("--pretrain-path")
   parser.add_argument(
       "--amp",
@@ -497,6 +596,16 @@ def parse_args() -> argparse.Namespace:
     args.mv_soft_temporal_alpha = 0.2
   if not hasattr(args, "mv_soft_temporal_tau"):
     args.mv_soft_temporal_tau = 1.0
+  if not hasattr(args, "tcc_loss_type"):
+    args.tcc_loss_type = "regression_mse"
+  if not hasattr(args, "tcc_similarity_type"):
+    args.tcc_similarity_type = "l2"
+  if not hasattr(args, "tcc_label_smoothing"):
+    args.tcc_label_smoothing = 0.1
+  if not hasattr(args, "tcc_variance_lambda"):
+    args.tcc_variance_lambda = 0.001
+  if not hasattr(args, "tcc_huber_delta"):
+    args.tcc_huber_delta = 0.1
   if not hasattr(args, "view_token_dropout"):
     args.view_token_dropout = 0.15
   if not hasattr(args, "view_token_noise_std"):
@@ -505,6 +614,18 @@ def parse_args() -> argparse.Namespace:
     args.attention_dropout = 0.1
   if not hasattr(args, "projector_dropout"):
     args.projector_dropout = 0.1
+  if not hasattr(args, "pixel_aug"):
+    args.pixel_aug = False
+  if not hasattr(args, "view_mask_mode"):
+    args.view_mask_mode = "none"
+  if not hasattr(args, "view_mask_prob"):
+    args.view_mask_prob = 0.0
+  if not hasattr(args, "view_mask_min_views"):
+    args.view_mask_min_views = 1
+  if not hasattr(args, "backbone"):
+    args.backbone = "vit_b16"
+  if not hasattr(args, "train_backbone_adapters"):
+    args.train_backbone_adapters = False
   return coerce_path_args(args)
 
 
@@ -882,6 +1003,28 @@ def make_transform(image_size: int):
   ])
 
 
+def make_weak_aug_transform(image_size: int):
+  return transforms.Compose([
+      transforms.Resize((image_size, image_size), antialias=True),
+      transforms.ColorJitter(
+          brightness=0.2,
+          contrast=0.2,
+          saturation=0.2,
+          hue=0.05,
+      ),
+      transforms.RandomGrayscale(p=0.1),
+      transforms.RandomApply([
+          transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+      ], p=0.1),
+      transforms.ToTensor(),
+      transforms.Normalize(
+          mean=(0.485, 0.456, 0.406),
+          std=(0.229, 0.224, 0.225),
+      ),
+      transforms.RandomErasing(p=0.05, scale=(0.02, 0.08), value=0.0),
+  ])
+
+
 def stratified_group_sample(
     groups: list[Group],
     num_timestamps: int,
@@ -987,6 +1130,80 @@ def prepare_batch_images(
       torch.stack(images, dim=0).to(device),
       torch.tensor(group_indices, dtype=torch.long, device=device),
       torch.tensor(camera_ids, dtype=torch.long, device=device),
+      group_idx,
+  )
+
+
+def sample_masked_views(
+    views: list[ViewRef],
+    mode: str,
+    mask_prob: float,
+    min_views: int,
+    rng: random.Random,
+) -> list[ViewRef]:
+  if mode == "none" or rng.random() >= mask_prob:
+    return list(views)
+  if mode != "drop_one":
+    raise ValueError(f"Unknown view_mask_mode: {mode}")
+  if len(views) <= max(1, min_views):
+    return list(views)
+  selected = list(views)
+  drop_idx = rng.randrange(len(selected))
+  del selected[drop_idx]
+  return selected
+
+
+def prepare_clean_aug_batch_images(
+    root: Path,
+    sequences: list[list[Group]],
+    clean_transform,
+    aug_transform,
+    device,
+    view_mask_mode: str,
+    view_mask_prob: float,
+    view_mask_min_views: int,
+    rng: random.Random,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    int,
+]:
+  clean_images = []
+  clean_group_indices = []
+  clean_camera_ids = []
+  aug_images = []
+  aug_group_indices = []
+  aug_camera_ids = []
+  group_idx = 0
+  for sequence in sequences:
+    for group in sequence:
+      for view in group.views:
+        clean_images.append(load_image(root, view.rel_path, clean_transform))
+        clean_group_indices.append(group_idx)
+        clean_camera_ids.append(view.camera_id)
+      masked_views = sample_masked_views(
+          group.views,
+          view_mask_mode,
+          view_mask_prob,
+          view_mask_min_views,
+          rng,
+      )
+      for view in masked_views:
+        aug_images.append(load_image(root, view.rel_path, aug_transform))
+        aug_group_indices.append(group_idx)
+        aug_camera_ids.append(view.camera_id)
+      group_idx += 1
+  return (
+      torch.stack(clean_images, dim=0).to(device),
+      torch.tensor(clean_group_indices, dtype=torch.long, device=device),
+      torch.tensor(clean_camera_ids, dtype=torch.long, device=device),
+      torch.stack(aug_images, dim=0).to(device),
+      torch.tensor(aug_group_indices, dtype=torch.long, device=device),
+      torch.tensor(aug_camera_ids, dtype=torch.long, device=device),
       group_idx,
   )
 
@@ -1102,6 +1319,137 @@ def compute_softdtw_paired(
       "top1": torch.ones((), device=h_seq.device),
       "pos_dist": distances.mean(),
       "off_dist": torch.zeros((), device=h_seq.device),
+  }
+
+
+def tcc_scaled_similarity(
+    emb1,
+    emb2,
+    similarity_type,
+    temperature,
+    normalize_dimension,
+):
+  if similarity_type == "l2":
+    similarity = -torch.cdist(emb1, emb2).pow(2)
+    if normalize_dimension:
+      similarity = similarity / emb1.shape[-1]
+  else:
+    similarity = emb1 @ emb2.t()
+  return similarity / temperature
+
+
+def tcc_align_sequence_pair(
+    emb1,
+    emb2,
+    similarity_type,
+    temperature,
+    normalize_dimension,
+):
+  sim_12 = tcc_scaled_similarity(
+      emb1,
+      emb2,
+      similarity_type,
+      temperature,
+      normalize_dimension,
+  )
+  nn_embs = F.softmax(sim_12, dim=1) @ emb2
+  logits = tcc_scaled_similarity(
+      nn_embs,
+      emb1,
+      similarity_type,
+      temperature,
+      normalize_dimension,
+  )
+  labels = torch.arange(emb1.shape[0], device=emb1.device)
+  return logits, labels
+
+
+def tcc_regression_loss(
+    logits,
+    labels,
+    loss_type,
+    variance_lambda,
+    huber_delta,
+):
+  num_timestamps = logits.shape[1]
+  steps = torch.arange(num_timestamps, device=logits.device).float()
+  steps = steps / float(num_timestamps)
+  target = steps[labels]
+  beta = F.softmax(logits, dim=1)
+  pred = (steps[None] * beta).sum(dim=1)
+  if loss_type == "regression_mse":
+    return F.mse_loss(pred, target)
+  if loss_type == "regression_huber":
+    return F.huber_loss(pred, target, delta=huber_delta)
+  pred_var = torch.log(((steps[None] - pred[:, None]).pow(2) * beta).sum(dim=1))
+  err_sq = (target - pred).pow(2)
+  return (torch.exp(-pred_var) * err_sq + variance_lambda * pred_var).mean()
+
+
+def compute_tcc_cycleback(
+    h_seq,
+    r_seq,
+    temperature,
+    loss_type,
+    similarity_type,
+    label_smoothing,
+    variance_lambda,
+    huber_delta,
+):
+  if h_seq.ndim != 3 or r_seq.ndim != 3:
+    raise ValueError("TCC sequences must have shape [B, T, D].")
+  if h_seq.shape != r_seq.shape:
+    raise ValueError("TCC H/R sequences must have the same shape.")
+
+  batch_size, num_timestamps, _ = h_seq.shape
+  logits_list = []
+  labels_list = []
+  for idx in range(batch_size):
+    logits_hr, labels_hr = tcc_align_sequence_pair(
+        h_seq[idx],
+        r_seq[idx],
+        similarity_type,
+        temperature,
+        normalize_dimension=(similarity_type == "l2"),
+    )
+    logits_rh, labels_rh = tcc_align_sequence_pair(
+        r_seq[idx],
+        h_seq[idx],
+        similarity_type,
+        temperature,
+        normalize_dimension=(similarity_type == "l2"),
+    )
+    logits_list.extend([logits_hr, logits_rh])
+    labels_list.extend([labels_hr, labels_rh])
+
+  logits = torch.cat(logits_list, dim=0)
+  labels = torch.cat(labels_list, dim=0)
+  if loss_type == "classification":
+    loss = F.cross_entropy(
+        logits,
+        labels,
+        label_smoothing=label_smoothing,
+    )
+  else:
+    loss = tcc_regression_loss(
+        logits,
+        labels,
+        loss_type,
+        variance_lambda,
+        huber_delta,
+    )
+
+  top1 = (logits.argmax(dim=1) == labels).float().mean()
+  distances = torch.cdist(h_seq, r_seq).pow(2)
+  pos = distances.diagonal(dim1=1, dim2=2).mean()
+  off = (
+      distances.sum() - distances.diagonal(dim1=1, dim2=2).sum()
+  ) / max(1, distances.numel() - batch_size * num_timestamps)
+  return loss, {
+      "distances": distances,
+      "top1": top1,
+      "pos_dist": pos,
+      "off_dist": off,
   }
 
 
@@ -1286,30 +1634,44 @@ def main() -> None:
         f"num_timestamps={args.num_timestamps} "
         f"num_multi_view={args.num_multi_view} "
         f"fusion_mode={args.fusion_mode} "
+        f"backbone={args.backbone} "
         f"softdtw_mode={args.softdtw_mode} "
         f"mv_soft_temporal={args.mv_soft_temporal} "
         f"mv_soft_temporal_alpha={args.mv_soft_temporal_alpha} "
         f"mv_soft_temporal_tau={args.mv_soft_temporal_tau} "
+        f"pixel_aug={args.pixel_aug} "
+        f"view_mask_mode={args.view_mask_mode} "
+        f"view_mask_prob={args.view_mask_prob} "
+        f"view_mask_min_views={args.view_mask_min_views} "
+        f"train_backbone_adapters={args.train_backbone_adapters} "
         f"num_camera_slots={num_camera_slots} "
         f"camera_matched_pairing={args.camera_matched_pairing} "
         f"world_size={world_size} "
         f"training_index={args.training_index}")
 
   transform = make_transform(args.image_size)
+  aug_transform = (
+      make_weak_aug_transform(args.image_size)
+      if args.pixel_aug else transform
+  )
   if args.fusion_mode == "fixed_slot":
     raw_model = FixedSlotFusionSoftDTW(
         num_camera_slots=args.num_camera_slots,
         embedding_size=args.embedding_size,
         fusion_size=args.fusion_size,
         pretrain_path=args.pretrain_path,
+        backbone=args.backbone,
         train_layernorm=True,
+        train_adapters=args.train_backbone_adapters,
     ).to(device).train()
   elif args.fusion_mode == "attention_pool":
     raw_model = ViewSetAttentionSoftDTW(
         embedding_size=args.embedding_size,
         fusion_size=args.fusion_size,
         pretrain_path=args.pretrain_path,
+        backbone=args.backbone,
         train_layernorm=True,
+        train_adapters=args.train_backbone_adapters,
         view_token_dropout=args.view_token_dropout,
         view_token_noise_std=args.view_token_noise_std,
         attention_dropout=args.attention_dropout,
@@ -1422,10 +1784,37 @@ def main() -> None:
         images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
             args.data_root, subset_sequences, transform, device)
       elif args.fusion_mode == "attention_pool":
-        images, group_idx, camera_ids, num_groups = prepare_batch_images(
-            args.data_root, all_sequences, transform, device)
+        if args.pixel_aug:
+          (
+              images,
+              group_idx,
+              camera_ids,
+              aug_images,
+              aug_group_idx,
+              aug_camera_ids,
+              num_groups,
+          ) = prepare_clean_aug_batch_images(
+              args.data_root,
+              all_sequences,
+              transform,
+              aug_transform,
+              device,
+              args.view_mask_mode,
+              args.view_mask_prob,
+              args.view_mask_min_views,
+              rng,
+          )
+        else:
+          images, group_idx, camera_ids, num_groups = prepare_batch_images(
+              args.data_root, all_sequences, transform, device)
+          aug_images = None
+          aug_group_idx = None
+          aug_camera_ids = None
       else:
         raise ValueError(f"Unknown fusion_mode: {args.fusion_mode}")
+      image_count = images.shape[0]
+      if args.fusion_mode == "attention_pool" and aug_images is not None:
+        image_count += aug_images.shape[0]
 
       optimizer.zero_grad(set_to_none=True)
       with torch.amp.autocast(
@@ -1435,7 +1824,19 @@ def main() -> None:
               images, group_idx, subset_idx, camera_ids, num_groups)
         else:
           z_groups, z_aux_a, z_aux_b = model(
-              images, group_idx, camera_ids, num_groups)
+              images,
+              group_idx,
+              camera_ids,
+              num_groups,
+              aug_images=aug_images,
+              aug_group_indices=aug_group_idx,
+              aug_camera_ids=aug_camera_ids,
+              aug_num_groups=num_groups,
+              feature_view_mask_mode=(
+                  args.view_mask_mode if not args.pixel_aug else "none"),
+              feature_view_mask_prob=args.view_mask_prob,
+              feature_view_mask_min_views=args.view_mask_min_views,
+          )
         z = z_groups.reshape(
             2 * args.batch_episode_pairs, args.num_timestamps, -1)
         h_seq = z[:args.batch_episode_pairs]
@@ -1454,6 +1855,17 @@ def main() -> None:
               r_seq,
               gamma=args.gamma,
               softdtw_divergence=args.softdtw_divergence,
+          )
+        elif args.softdtw_mode == "tcc":
+          loss_softdtw, metrics = compute_tcc_cycleback(
+              h_seq,
+              r_seq,
+              temperature=args.temperature,
+              loss_type=args.tcc_loss_type,
+              similarity_type=args.tcc_similarity_type,
+              label_smoothing=args.tcc_label_smoothing,
+              variance_lambda=args.tcc_variance_lambda,
+              huber_delta=args.tcc_huber_delta,
           )
         else:
           raise ValueError(f"Unknown softdtw_mode: {args.softdtw_mode}")
@@ -1554,7 +1966,7 @@ def main() -> None:
           f"{aux_r['off'].item():.6f}",
           f"{emb_std:.8f}",
           args.batch_episode_pairs,
-          images.shape[0],
+          image_count,
           f"{seconds:.4f}",
           f"{mem_mb:.1f}",
       ]
@@ -1567,7 +1979,7 @@ def main() -> None:
             f"aux_diag_off_h={row[11]}/{row[12]} "
             f"aux_diag_off_r={row[13]}/{row[14]} "
             f"emb_std={row[15]} episode_pairs={args.batch_episode_pairs} "
-            f"imgs={images.shape[0]} "
+            f"imgs={image_count} "
             f"mem={row[19]}MB sec={row[18]}",
             flush=True,
         )
