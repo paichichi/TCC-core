@@ -4,7 +4,7 @@
 # Smoke test:
 #   python train.py --exp_cfg_path configs/nesi_vit_ln_first_version_8ts4v.yaml --device 0 -- --batch-episode-pairs 1 --max-iters 1 --log-every 1 --save-every 0
 
-data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T
+data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
 training_index: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
 pretrain_path: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/D4R_IN_1M.pth
 output_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/runs

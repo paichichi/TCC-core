@@ -3,7 +3,7 @@
 #
 # Original R3M ResNet50 BN-affine baseline, 8 timestamp groups, 4 views.
 
-data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T
+data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
 training_index: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
 pretrain_path: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
 output_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/runs
