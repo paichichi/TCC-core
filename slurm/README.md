@@ -153,10 +153,10 @@ DRY_RUN=1 ./slurm/submit_four_backbone_experiments_nesi.sh
 Expected jobs:
 
 ```text
-tcc_vit_ln_8ts4v    -> configs/nesi_vit_ln_8ts4v.yaml
-tcc_vit_ln_8ts3v    -> configs/nesi_vit_ln_8ts3v.yaml
-tcc_r3m_bn_8ts4v    -> configs/nesi_r3m_bn_affine_8ts4v.yaml
-tcc_r3m_late_8ts4v  -> configs/nesi_r3m_late_adapter_8ts4v.yaml
+tcc_vit_ln_8ts4v              -> configs/nesi_vit_ln_8ts4v.yaml
+tcc_vit_ln_8ts3v              -> configs/nesi_vit_ln_8ts3v.yaml
+tcc_r3m_bn_affine_8ts4v       -> configs/nesi_r3m_bn_affine_8ts4v.yaml
+tcc_r3m_late_adapter_8ts4v    -> configs/nesi_r3m_late_adapter_8ts4v.yaml
 ```
 
 ## 3. Submit All Four Jobs
@@ -166,6 +166,14 @@ Only run this after the smoke tests and dry-run pass.
 ```bash
 cd /nesi/project/uoa04758/xzha593/GitHub/TCC-core
 ./slurm/submit_four_backbone_experiments_nesi.sh
+```
+
+To submit only one YAML:
+
+```bash
+sbatch --job-name=tcc_vit_ln_8ts4v \
+  ./slurm/train_2a100_nesi.sh \
+  configs/nesi_vit_ln_8ts4v.yaml
 ```
 
 Check queue status:
@@ -187,6 +195,8 @@ Before submitting, make sure these paths exist on NeSI:
 
 ```bash
 ls /nesi/nobackup/uoa04758/xzha593/datasets/RH20T
+ls /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
+ls /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T/train
 ls /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
 ls /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/D4R_IN_1M.pth
 ls /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
@@ -201,7 +211,7 @@ If training fails with `FileNotFoundError`, check whether the current
 
 ```bash
 python scripts/audit_training_index_files.py \
-  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T \
+  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T \
   --training-index /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
 ```
 
@@ -209,7 +219,7 @@ If only a small number of image refs are missing, create a filtered index:
 
 ```bash
 python scripts/audit_training_index_files.py \
-  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T \
+  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T \
   --training-index /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt \
   --output /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.filtered.pt
 ```
