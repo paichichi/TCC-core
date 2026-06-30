@@ -17,14 +17,56 @@ nvidia-smi
 
 ### ViT LN Smoke Test
 
+Use the same timestamp/view shape as the real job. Do not use a tiny
+`2 timestamps / 2 views` override here, because that samples a wider episode
+pool and can hit files that are not part of the formal `8ts4v` setting.
+
+### First-Version ViT LN Smoke Test
+
+This checks the original fixed camera-slot fusion version.
+
+```bash
+python train.py \
+  --exp_cfg_path configs/nesi_vit_ln_first_version_8ts4v.yaml \
+  --device 0 \
+  -- \
+  --batch-episode-pairs 1 \
+  --num-timestamps 8 \
+  --num-multi-view 4 \
+  --max-iters 1 \
+  --log-every 1 \
+  --save-every 0
+```
+
+Expected first line should include:
+
+```text
+fusion_mode=fixed_slot ... mv_soft_temporal=False ... num_camera_slots=...
+```
+
 ```bash
 python train.py \
   --exp_cfg_path configs/nesi_vit_ln_8ts4v.yaml \
   --device 0 \
   -- \
   --batch-episode-pairs 1 \
-  --num-timestamps 2 \
-  --num-multi-view 2 \
+  --num-timestamps 8 \
+  --num-multi-view 4 \
+  --max-iters 1 \
+  --log-every 1 \
+  --save-every 0
+```
+
+For the `8ts3v` ViT job, use:
+
+```bash
+python train.py \
+  --exp_cfg_path configs/nesi_vit_ln_8ts3v.yaml \
+  --device 0 \
+  -- \
+  --batch-episode-pairs 1 \
+  --num-timestamps 8 \
+  --num-multi-view 3 \
   --max-iters 1 \
   --log-every 1 \
   --save-every 0
@@ -38,8 +80,8 @@ python train.py \
   --device 0 \
   -- \
   --batch-episode-pairs 1 \
-  --num-timestamps 2 \
-  --num-multi-view 2 \
+  --num-timestamps 8 \
+  --num-multi-view 4 \
   --max-iters 1 \
   --log-every 1 \
   --save-every 0
@@ -53,8 +95,8 @@ python train.py \
   --device 0 \
   -- \
   --batch-episode-pairs 1 \
-  --num-timestamps 2 \
-  --num-multi-view 2 \
+  --num-timestamps 8 \
+  --num-multi-view 4 \
   --max-iters 1 \
   --log-every 1 \
   --save-every 0
@@ -151,3 +193,26 @@ ls /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
 ```
 
 If a path is wrong, edit the corresponding YAML in `configs/nesi_*.yaml`.
+
+## 5. Audit Missing Training Images
+
+If training fails with `FileNotFoundError`, check whether the current
+`training_index.pt` matches the copied RH20T image directory:
+
+```bash
+python scripts/audit_training_index_files.py \
+  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T \
+  --training-index /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
+```
+
+If only a small number of image refs are missing, create a filtered index:
+
+```bash
+python scripts/audit_training_index_files.py \
+  --data-root /nesi/nobackup/uoa04758/xzha593/datasets/RH20T \
+  --training-index /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt \
+  --output /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.filtered.pt
+```
+
+Then point the `training_index` field in the NeSI YAML files to
+`training_index.filtered.pt`.
