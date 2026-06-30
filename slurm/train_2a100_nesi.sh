@@ -12,8 +12,9 @@
 
 set -euo pipefail
 
-TCC_REPO_ROOT=/nesi/project/uoa04758/xzha593/GitHub/TCC-core
-ACTIVATE_SCRIPT=/nesi/project/uoa04758/xzha593/envs/activate_tcc_core.sh
+TCC_REPO_ROOT=${TCC_REPO_ROOT:-/nesi/project/uoa04758/xzha593/GitHub/TCC-core}
+ACTIVATE_SCRIPT=${ACTIVATE_SCRIPT:-/nesi/project/uoa04758/xzha593/envs/activate_tcc_core.sh}
+LOG_DIR=${LOG_DIR:-/nesi/project/uoa04758/xzha593/logs}
 
 EXP_CFG_PATH=${EXP_CFG_PATH:-}
 RUN_NAME=${RUN_NAME:-train_2a100_lr7p5e5_20k}
@@ -26,10 +27,20 @@ LOG_EVERY=${LOG_EVERY:-10}
 SAVE_EVERY=${SAVE_EVERY:-1000}
 DEVICES=${TRAIN_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}
 
-mkdir -p /nesi/project/uoa04758/xzha593/logs
+mkdir -p "${LOG_DIR}"
+
+if [[ ! -f "${ACTIVATE_SCRIPT}" ]]; then
+  echo "Missing activate script: ${ACTIVATE_SCRIPT}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${TCC_REPO_ROOT}" ]]; then
+  echo "Missing TCC repo root: ${TCC_REPO_ROOT}" >&2
+  exit 1
+fi
 
 source "${ACTIVATE_SCRIPT}"
-cd "${PROJECT_ROOT}"
+cd "${TCC_REPO_ROOT}"
 
 export PYTHONUNBUFFERED=1
 export NCCL_IB_DISABLE=1
@@ -39,16 +50,12 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 echo "Host: $(hostname)"
-echo "Job ID: ${SLURM_JOB_ID}"
+echo "Job ID: ${SLURM_JOB_ID:-local}"
+echo "TCC_REPO_ROOT=${TCC_REPO_ROOT}"
+echo "ACTIVATE_SCRIPT=${ACTIVATE_SCRIPT}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
-echo "EXP_CFG_PATH=${EXP_CFG_PATH:-configs/train_2a100.yaml}"
-echo "RUN_NAME=${RUN_NAME}"
-echo "NUM_TIMESTAMPS=${NUM_TIMESTAMPS}"
-echo "NUM_MULTI_VIEW=${NUM_MULTI_VIEW}"
-echo "BATCH_EPISODE_PAIRS=${BATCH_EPISODE_PAIRS}"
-echo "LR=${LR}"
-echo "MAX_ITERS=${MAX_ITERS}"
 echo "TRAIN_DEVICES=${DEVICES}"
+echo "EXP_CFG_PATH=${EXP_CFG_PATH:-<legacy override mode>}"
 which python
 nvidia-smi
 
@@ -57,10 +64,20 @@ if [[ -n "${EXP_CFG_PATH}" ]]; then
     echo "Missing config: ${EXP_CFG_PATH}" >&2
     exit 1
   fi
+  echo "Mode: config"
   python train.py \
     --exp_cfg_path "${EXP_CFG_PATH}" \
     --device "${DEVICES}"
 else
+  echo "Mode: legacy overrides"
+  echo "RUN_NAME=${RUN_NAME}"
+  echo "NUM_TIMESTAMPS=${NUM_TIMESTAMPS}"
+  echo "NUM_MULTI_VIEW=${NUM_MULTI_VIEW}"
+  echo "BATCH_EPISODE_PAIRS=${BATCH_EPISODE_PAIRS}"
+  echo "LR=${LR}"
+  echo "MAX_ITERS=${MAX_ITERS}"
+  echo "LOG_EVERY=${LOG_EVERY}"
+  echo "SAVE_EVERY=${SAVE_EVERY}"
   python train.py \
     --exp_cfg_path configs/train_2a100.yaml \
     --device "${DEVICES}" \
