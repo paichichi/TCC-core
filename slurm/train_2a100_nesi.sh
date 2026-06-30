@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-PROJECT_ROOT=${PROJECT_ROOT:-/nesi/project/uoa04758/xzha593/GitHub/TCC-core}
-ACTIVATE_SCRIPT=${ACTIVATE_SCRIPT:-/nesi/project/uoa04758/xzha593/envs/activate_hralign.sh}
+TCC_REPO_ROOT=/nesi/project/uoa04758/xzha593/GitHub/TCC-core
+ACTIVATE_SCRIPT=/nesi/project/uoa04758/xzha593/envs/activate_tcc_core.sh
 
 EXP_CFG_PATH=${EXP_CFG_PATH:-}
 RUN_NAME=${RUN_NAME:-train_2a100_lr7p5e5_20k}
