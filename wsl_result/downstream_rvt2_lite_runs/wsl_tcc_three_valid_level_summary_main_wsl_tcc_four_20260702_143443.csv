@@ -1,0 +1,7 @@
+run,level,n,mean_success_rate,mean_length
+wsl_r3m_bn_affine_8ts4v,level1,18,32.22,15.53
+wsl_r3m_bn_affine_8ts4v,level2,18,21.11,17.99
+wsl_r3m_late_adapter_8ts4v,level1,18,32.78,16.06
+wsl_r3m_late_adapter_8ts4v,level2,18,26.11,17.09
+wsl_vit_ln_8ts4v,level1,18,32.78,15.03
+wsl_vit_ln_8ts4v,level2,18,33.89,13.36

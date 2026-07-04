@@ -1,9 +1,9 @@
-exp_id: rvt2_lite_hard_ours_8ts3v
-tasks: close_jar,insert_onto_square_peg
+exp_id: rvt2_lite_wsl_tcc_r3m_late_adapter_8ts4v
+tasks: open_drawer,push_buttons
 bs: 3
 num_workers: 3
 epochs: 1
-train_iterations: 10000
+train_iterations: 50000
 sample_distribution_mode: task_uniform
 
 depth: 1
@@ -11,16 +11,16 @@ stage_one_depth: 8
 stage_two_depth: 1
 attn_dim: 512
 ds_rate: 1.0
-adapter: []
-model: MVT_ViT
+adapter: ['late.layer.3.k.1.down.4.g.8']
+model: MVT_Resnet
 output_dim: 512
 stage_two: true
 rot_ver: 1
 feat_ver: 1
 cvx_up: true
 
-pretrain: /home/paichichi/projects/TCC-core/NESI_result/train_2a100_d4r_8ts3v_lr7p5e5_20k/checkpoint_020000.pt
-overwriter_log_dir: /home/paichichi/projects/TCC-core/downstream/rvt2_lite/runs/hard/ours_8ts3v
+pretrain: /home/paichichi/projects/TCC-core/wsl_result/downstream_pretrains/wsl_lite_r3m_late_adapter_8ts4v_b4_i3000_rvt2_resnet_pretrain.pt
+overwriter_log_dir: /home/paichichi/projects/TCC-core/downstream/rvt2_lite/runs/base/wsl_tcc_r3m_late_adapter_8ts4v
 train_replay_storage_dir: /home/paichichi/data/rvt/train/replay/replay_train
 data_folder: null
 num_train: 10

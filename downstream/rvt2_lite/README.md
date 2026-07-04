@@ -16,6 +16,19 @@ The idea is to keep the downstream setup close to RVT2, but shrink the budget:
 - short training
 - real rollout evaluation
 
+## Directory Layout
+
+```text
+downstream/rvt2_lite/
+  configs/      # RVT2-lite experiment configs
+  slurm/        # NeSI job wrappers for this downstream probe
+  runs/         # RVT2-lite policy checkpoints, logs, raw CSVs, and summaries
+```
+
+Keep RVT2-lite outputs under `downstream/rvt2_lite/runs/`. The repo-level
+`downstream/analysis/` directory is reserved for TCC-core
+representation/retrieval analysis, not downstream policy results.
+
 ## Models
 
 We compare four visual initializers:
@@ -88,14 +101,14 @@ done
 After training, each run writes:
 
 ```text
-analysis/rvt2_lite/runs/<run_name>/model_0.pth
+downstream/rvt2_lite/runs/base/<run_name>/model_0.pth
 ```
 
 Evaluate a trained model:
 
 ```bash
 python -m rvt.eval \
-  --model-folder /home/paichichi/projects/TCC-core/analysis/rvt2_lite/runs/ours_8ts3v \
+  --model-folder /home/paichichi/projects/TCC-core/downstream/rvt2_lite/runs/base/ours_8ts3v \
   --model-name model_0.pth \
   --tasks open_drawer push_buttons \
   --eval-datafolder /home/paichichi/data/rvt/train/replay/replay_train \
@@ -119,7 +132,7 @@ conda run --no-capture-output -n hralign_py39 \
   --exp_cfg_path /home/paichichi/projects/TCC-core/downstream/rvt2_lite/configs/ours_8ts3v.yaml \
   --mvt_cfg_path /home/paichichi/projects/rvt-3d-policy-head-adaption/rvt/mvt/configs/rvt2.yaml \
   --device 0 \
-  --exp_cfg_opts "tasks open_drawer num_train 2 bs 2 num_workers 0 train_iterations 2 overwriter_log_dir /home/paichichi/projects/TCC-core/analysis/rvt2_lite/smoke/ours_8ts3v"
+  --exp_cfg_opts "tasks open_drawer num_train 2 bs 2 num_workers 0 train_iterations 2 overwriter_log_dir /home/paichichi/projects/TCC-core/downstream/rvt2_lite/runs/smoke/ours_8ts3v"
 ```
 
 ## Readout

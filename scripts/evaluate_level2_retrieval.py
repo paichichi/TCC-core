@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
       "--out-dir",
       type=Path,
-      default=Path("analysis/level2_retrieval"),
+      default=Path("downstream/analysis/level2_retrieval"),
   )
   parser.add_argument("--num-episodes", type=int, default=128)
   parser.add_argument(

@@ -9,7 +9,7 @@ DEVICE=${DEVICE:-0}
 MVT_CFG=${MVT_CFG:-${RVT_ROOT}/rvt/mvt/configs/rvt2.yaml}
 
 STAMP=${STAMP:-$(date +%H%M%S)}
-BASE="${TCC_ROOT}/analysis/rvt2_lite"
+BASE="${TCC_ROOT}/downstream/rvt2_lite/runs"
 TRAIN_LOG_DIR="${BASE}/eight_train_logs_${STAMP}"
 EVAL_LOG_DIR="${BASE}/eight_rvt2_style_3x10_logs_${STAMP}"
 RAW="${BASE}/eight_rvt2_style_3x10_${STAMP}.csv"
@@ -23,7 +23,14 @@ EPISODES=0,1,2,3,4,5,6,7,8,9
 mkdir -p "${TRAIN_LOG_DIR}" "${EVAL_LOG_DIR}"
 
 export PYTHONUNBUFFERED=1
-export PYTHONPATH="${RVT_ROOT}:${RVT_ROOT}/rvt:${PYTHONPATH:-}"
+export PYTHONPATH="${RVT_ROOT}:${RVT_ROOT}/rvt:${RVT_ROOT}/rvt/libs/YARR:${RVT_ROOT}/rvt/libs/RLBench:${RVT_ROOT}/rvt/libs/PyRep:${RVT_ROOT}/rvt/libs/peract:${RVT_ROOT}/rvt/libs/peract_colab:${RVT_ROOT}/rvt/libs/point-renderer:${PYTHONPATH:-}"
+export COPPELIASIM_ROOT="${COPPELIASIM_ROOT:-/home/paichichi/software/CoppeliaSim_4_1_0}"
+export TORCH_LIB_DIR="${TORCH_LIB_DIR:-/home/paichichi/miniconda3/envs/${CONDA_ENV}/lib/python3.9/site-packages/torch/lib}"
+export CONDA_LIB_DIR="${CONDA_LIB_DIR:-/home/paichichi/miniconda3/envs/${CONDA_ENV}/lib}"
+export LD_LIBRARY_PATH="${TORCH_LIB_DIR}:${CONDA_LIB_DIR}:${COPPELIASIM_ROOT}:${COPPELIASIM_ROOT}/lib:${LD_LIBRARY_PATH:-}"
+export QT_QPA_PLATFORM_PLUGIN_PATH="${COPPELIASIM_ROOT}"
+export QT_PLUGIN_PATH="${COPPELIASIM_ROOT}"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 
 echo "STAMP=${STAMP}"
 echo "TRAIN_LOG_DIR=${TRAIN_LOG_DIR}"
@@ -46,7 +53,7 @@ for cfg in "${CONFIGS[@]}"; do
 done
 
 for run in "${RUNS[@]}"; do
-  ckpt="${BASE}/eight_runs/${run}/model_0.pth"
+  ckpt="${BASE}/eight/${run}/model_0.pth"
   test -s "${ckpt}"
   ls -lh "${ckpt}"
 done
@@ -60,7 +67,7 @@ for rep in 1 2 3; do
     outlog="${EVAL_LOG_DIR}/${run}_rep${rep}.log"
     echo "EVAL ${run} repeat=${rep} START $(date '+%F %T')"
     if "${CONDA_EXE}" run --no-capture-output -n "${CONDA_ENV}" python -m rvt.eval \
-      --model-folder "${BASE}/eight_runs/${run}" \
+      --model-folder "${BASE}/eight/${run}" \
       --model-name model_0.pth \
       --tasks "${TASKS[@]}" \
       --eval-datafolder /home/paichichi/data/AGNOSTOS/seen_tasks/train \
@@ -72,7 +79,7 @@ for rep in 1 2 3; do
       --no-tensorboard \
       --no-env-shutdown \
       > "${outlog}" 2>&1; then
-      csv="${BASE}/eight_runs/${run}/eval/${log_name}/model_0/eval_results.csv"
+      csv="${BASE}/eight/${run}/eval/${log_name}/model_0/eval_results.csv"
       awk -F, -v run="${run}" -v rep="${rep}" 'NR>1 {gsub(/\r/,"",$4); print run","rep","$1","$2","$3","$4",ok"}' "${csv}" >> "${RAW}"
       echo "EVAL ${run} repeat=${rep} DONE $(date '+%F %T')"
     else

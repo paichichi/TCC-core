@@ -26,9 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runs-root",
         type=Path,
-        default=Path("analysis/rvt2_lite/runs"),
+        default=Path("downstream/rvt2_lite/runs/base"),
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("analysis/rvt2_lite"))
+    parser.add_argument("--out-dir", type=Path, default=Path("downstream/rvt2_lite/runs"))
     parser.add_argument("--runs", nargs="+", default=DEFAULT_RUNS)
     return parser.parse_args()
 

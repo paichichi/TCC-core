@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
       "--out-dir",
       type=Path,
-      default=Path("analysis/level1_losses"),
+      default=Path("downstream/analysis/level1_losses"),
       help="Directory for summary CSVs and plots.",
   )
   parser.add_argument(

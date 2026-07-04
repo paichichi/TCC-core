@@ -6,37 +6,41 @@ TCC_ROOT=${TCC_ROOT:-/home/paichichi/projects/TCC-core}
 CONDA_ENV=${CONDA_ENV:-hralign_py39}
 CONDA_EXE=${CONDA_EXE:-/home/paichichi/miniconda3/bin/conda}
 DEVICE=${DEVICE:-0}
-MVT_CFG=${MVT_CFG:-${RVT_ROOT}/rvt/mvt/configs/rvt2.yaml}
-TRAIN_ITERATIONS=${TRAIN_ITERATIONS:-25000}
 
-STAMP=${STAMP:-$(date +%H%M%S)}
+STAMP=${STAMP:-diag12_$(date +%H%M%S)}
 BASE="${TCC_ROOT}/downstream/rvt2_lite/runs"
-TRAIN_LOG_DIR="${BASE}/twelve_train_logs_${STAMP}"
-EVAL_LOG_DIR="${BASE}/twelve_rvt2_style_3x10_logs_${STAMP}"
-RAW="${BASE}/twelve_rvt2_style_3x10_${STAMP}.csv"
-SUMMARY="${BASE}/twelve_rvt2_style_3x10_summary_${STAMP}.csv"
-OVERALL="${BASE}/twelve_rvt2_style_3x10_overall_${STAMP}.csv"
+RUN_ROOT=${RUN_ROOT:-${BASE}/seen18_unseen6}
+EVAL_LOG_DIR="${BASE}/seen18_diag12_eval_logs_${STAMP}"
+RAW="${BASE}/seen18_diag12_${STAMP}.csv"
+SUMMARY="${BASE}/seen18_diag12_summary_${STAMP}.csv"
+OVERALL="${BASE}/seen18_diag12_overall_${STAMP}.csv"
+LEVELS="${BASE}/seen18_diag12_level_summary_${STAMP}.csv"
 
 RUNS=(d4r hrp ours_6ts4v ours_8ts3v)
-CONFIGS=(d4r hrp ours_6ts4v ours_8ts3v)
-TASKS=(
-  push_buttons
-  slide_block_to_color_target
-  sweep_to_dustpan_of_size
-  meat_off_grill
-  turn_tap
-  reach_and_drag
-  place_shape_in_shape_sorter
-  close_jar
-  put_money_in_safe
-  place_wine_at_rack_location
-  stack_cups
-  insert_onto_square_peg
-)
-TASKS_CSV=$(IFS=,; echo "${TASKS[*]}")
-EPISODES=0,1,2,3,4,5,6,7,8,9
 
-mkdir -p "${TRAIN_LOG_DIR}" "${EVAL_LOG_DIR}"
+LEVEL1_TASKS=(
+  close_fridge
+  close_microwave
+  close_laptop_lid
+  toilet_seat_down
+  open_grill
+  phone_on_base
+)
+
+LEVEL2_TASKS=(
+  take_usb_out_of_computer
+  take_lid_off_saucepan
+  turn_oven_on
+  beat_the_buzz
+  water_plants
+  unplug_charger
+)
+
+TASKS=("${LEVEL1_TASKS[@]}" "${LEVEL2_TASKS[@]}")
+EPISODES=${EPISODES:-0,1,2,3,4,5,6,7,8,9}
+REPEATS=${REPEATS:-3}
+
+mkdir -p "${EVAL_LOG_DIR}"
 
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${RVT_ROOT}:${RVT_ROOT}/rvt:${RVT_ROOT}/rvt/libs/YARR:${RVT_ROOT}/rvt/libs/RLBench:${RVT_ROOT}/rvt/libs/PyRep:${RVT_ROOT}/rvt/libs/peract:${RVT_ROOT}/rvt/libs/peract_colab:${RVT_ROOT}/rvt/libs/point-renderer:${PYTHONPATH:-}"
@@ -49,51 +53,37 @@ export QT_PLUGIN_PATH="${COPPELIASIM_ROOT}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 
 echo "STAMP=${STAMP}"
-echo "TRAIN_ITERATIONS=${TRAIN_ITERATIONS}"
-echo "TASKS=${TASKS_CSV}"
-echo "TRAIN_LOG_DIR=${TRAIN_LOG_DIR}"
+echo "RUN_ROOT=${RUN_ROOT}"
+echo "LEVEL1_TASKS=${LEVEL1_TASKS[*]}"
+echo "LEVEL2_TASKS=${LEVEL2_TASKS[*]}"
+echo "EPISODES=${EPISODES}"
+echo "REPEATS=${REPEATS}"
 echo "EVAL_LOG_DIR=${EVAL_LOG_DIR}"
 echo "RAW=${RAW}"
 echo "SUMMARY=${SUMMARY}"
 echo "OVERALL=${OVERALL}"
-echo "START_TRAIN $(date '+%F %T')"
+echo "LEVELS=${LEVELS}"
 
 cd "${RVT_ROOT}"
 
-for i in "${!RUNS[@]}"; do
-  run="${RUNS[$i]}"
-  cfg="${CONFIGS[$i]}"
-  out_dir="${BASE}/twelve/${run}"
-  echo "TRAIN ${run} START $(date '+%F %T')"
-  "${CONDA_EXE}" run --no-capture-output -n "${CONDA_ENV}" python -m rvt.train \
-    --exp_cfg_path "${TCC_ROOT}/downstream/rvt2_lite/configs/${cfg}.yaml" \
-    --mvt_cfg_path "${MVT_CFG}" \
-    --device "${DEVICE}" \
-    --exp_cfg_opts "tasks ${TASKS_CSV} train_iterations ${TRAIN_ITERATIONS} overwriter_log_dir ${out_dir}" \
-    > "${TRAIN_LOG_DIR}/${run}.log" 2>&1
-  echo "TRAIN ${run} DONE $(date '+%F %T')"
-  grep -E "^\{|'total_loss'|'trans_loss'|'rot_loss_z'|\\[Finish\\]" "${TRAIN_LOG_DIR}/${run}.log" | tail -20 || true
-done
-
 for run in "${RUNS[@]}"; do
-  ckpt="${BASE}/twelve/${run}/model_0.pth"
+  ckpt="${RUN_ROOT}/${run}/model_0.pth"
   test -s "${ckpt}"
   ls -lh "${ckpt}"
 done
 
-echo "START_EVAL $(date '+%F %T')"
 echo 'run,repeat,task,success_rate,length,total_transitions,status' > "${RAW}"
 
-for rep in 1 2 3; do
+for rep in $(seq 1 "${REPEATS}"); do
   for run in "${RUNS[@]}"; do
-    log_name="twelve_rvt2_style_3x10_${STAMP}_rep${rep}"
+    log_name="seen18_diag12_${STAMP}_rep${rep}"
     outlog="${EVAL_LOG_DIR}/${run}_rep${rep}.log"
     echo "EVAL ${run} repeat=${rep} START $(date '+%F %T')"
     if "${CONDA_EXE}" run --no-capture-output -n "${CONDA_ENV}" python -m rvt.eval \
-      --model-folder "${BASE}/twelve/${run}" \
+      --model-folder "${RUN_ROOT}/${run}" \
       --model-name model_0.pth \
       --tasks "${TASKS[@]}" \
-      --eval-datafolder /home/paichichi/data/AGNOSTOS/seen_tasks/train \
+      --eval-datafolder /home/paichichi/data/AGNOSTOS/unseen_tasks/test \
       --eval-episode-list "${EPISODES}" \
       --episode-length 25 \
       --headless \
@@ -102,7 +92,7 @@ for rep in 1 2 3; do
       --no-tensorboard \
       --no-env-shutdown \
       > "${outlog}" 2>&1; then
-      csv="${BASE}/twelve/${run}/eval/${log_name}/model_0/eval_results.csv"
+      csv="${RUN_ROOT}/${run}/eval/${log_name}/model_0/eval_results.csv"
       awk -F, -v run="${run}" -v rep="${rep}" 'NR>1 {gsub(/\r/,"",$4); print run","rep","$1","$2","$3","$4",ok"}' "${csv}" >> "${RAW}"
       echo "EVAL ${run} repeat=${rep} DONE $(date '+%F %T')"
     else
@@ -138,7 +128,27 @@ done
   awk -F, 'NR>1 && $7=="ok" {n[$1]++; sum[$1]+=$4; len[$1]+=$5} END {for (r in n) printf "%s,%d,%.2f,%.2f\n", r, n[r], sum[r]/n[r], len[r]/n[r]}' "${RAW}" | sort
 } > "${OVERALL}"
 
+{
+  echo 'run,level,n,mean_success_rate,mean_length'
+  awk -F, '
+    BEGIN {
+      split("close_fridge close_microwave close_laptop_lid toilet_seat_down open_grill phone_on_base", l1, " ")
+      for (i in l1) level[l1[i]]="level1"
+      split("take_usb_out_of_computer take_lid_off_saucepan turn_oven_on beat_the_buzz water_plants unplug_charger", l2, " ")
+      for (i in l2) level[l2[i]]="level2"
+    }
+    NR>1 && $7=="ok" {
+      key=$1","level[$3]
+      n[key]++; sum[key]+=$4; len[key]+=$5
+    }
+    END {
+      for (k in n) printf "%s,%d,%.2f,%.2f\n", k, n[k], sum[k]/n[k], len[k]/n[k]
+    }' "${RAW}" | sort
+} > "${LEVELS}"
+
 echo "FINISH $(date '+%F %T')"
 cat "${SUMMARY}"
 echo "OVERALL"
 cat "${OVERALL}"
+echo "LEVELS"
+cat "${LEVELS}"

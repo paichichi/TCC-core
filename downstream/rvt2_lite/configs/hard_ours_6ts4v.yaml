@@ -20,7 +20,7 @@ feat_ver: 1
 cvx_up: true
 
 pretrain: /home/paichichi/projects/TCC-core/NESI_result/train_2a100_d4r_6ts4v_lr7p5e5_20k/checkpoint_020000.pt
-overwriter_log_dir: /home/paichichi/projects/TCC-core/analysis/rvt2_lite/hard_runs/ours_6ts4v
+overwriter_log_dir: /home/paichichi/projects/TCC-core/downstream/rvt2_lite/runs/hard/ours_6ts4v
 train_replay_storage_dir: /home/paichichi/data/rvt/train/replay/replay_train
 data_folder: null
 num_train: 10

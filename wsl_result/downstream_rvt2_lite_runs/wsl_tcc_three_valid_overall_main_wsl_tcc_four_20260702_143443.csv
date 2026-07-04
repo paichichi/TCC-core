@@ -1,0 +1,4 @@
+run,n,overall_mean_success_rate,overall_mean_length
+wsl_r3m_bn_affine_8ts4v,36,26.67,16.76
+wsl_r3m_late_adapter_8ts4v,36,29.44,16.58
+wsl_vit_ln_8ts4v,36,33.33,14.19
