@@ -272,11 +272,11 @@ class ViewSetAttentionSoftDTW(nn.Module):
       return mask
     if mode != "drop_one":
       raise ValueError(f"Unknown feature view mask mode: {mode}")
+    del min_views
     out = mask.clone()
-    keep_min = max(1, min_views)
     for group_idx in range(out.shape[0]):
       valid = torch.nonzero(out[group_idx], as_tuple=False).flatten()
-      if valid.numel() <= keep_min:
+      if valid.numel() <= 1:
         continue
       if torch.rand((), device=out.device) >= mask_prob:
         continue
@@ -434,12 +434,19 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   )
   parser.add_argument(
       "--softdtw-mode",
-      choices=("contrastive", "paired", "tcc"),
+      choices=("contrastive", "paired", "tcc", "soft_alignment"),
       help=(
           "contrastive computes the full H/R batch distance matrix; paired "
-          "only aligns each episode-level H/R pair; tcc uses paired cycle-back."
+          "only aligns each episode-level H/R pair; tcc uses paired cycle-back; "
+          "soft_alignment distills a Sinkhorn temporal-prior teacher."
       ),
   )
+  parser.add_argument("--soft-alignment-temperature", type=float)
+  parser.add_argument("--soft-alignment-epsilon", type=float)
+  parser.add_argument("--soft-alignment-rho", type=float)
+  parser.add_argument("--soft-alignment-sinkhorn-iters", type=int)
+  parser.add_argument("--soft-alignment-struct-lambda", type=float)
+  parser.add_argument("--soft-alignment-max-forward-step", type=float)
   parser.add_argument("--lambda-mv", type=float)
   parser.add_argument("--mv-temperature", type=float)
   parser.add_argument(
@@ -606,6 +613,18 @@ def parse_args() -> argparse.Namespace:
     args.tcc_variance_lambda = 0.001
   if not hasattr(args, "tcc_huber_delta"):
     args.tcc_huber_delta = 0.1
+  if not hasattr(args, "soft_alignment_temperature"):
+    args.soft_alignment_temperature = getattr(args, "temperature", 0.1)
+  if not hasattr(args, "soft_alignment_epsilon"):
+    args.soft_alignment_epsilon = 0.05
+  if not hasattr(args, "soft_alignment_rho"):
+    args.soft_alignment_rho = 0.5
+  if not hasattr(args, "soft_alignment_sinkhorn_iters"):
+    args.soft_alignment_sinkhorn_iters = 20
+  if not hasattr(args, "soft_alignment_struct_lambda"):
+    args.soft_alignment_struct_lambda = 0.1
+  if not hasattr(args, "soft_alignment_max_forward_step"):
+    args.soft_alignment_max_forward_step = 1.0
   if not hasattr(args, "view_token_dropout"):
     args.view_token_dropout = 0.15
   if not hasattr(args, "view_token_noise_std"):
@@ -1141,11 +1160,12 @@ def sample_masked_views(
     min_views: int,
     rng: random.Random,
 ) -> list[ViewRef]:
+  del min_views
   if mode == "none" or rng.random() >= mask_prob:
     return list(views)
   if mode != "drop_one":
     raise ValueError(f"Unknown view_mask_mode: {mode}")
-  if len(views) <= max(1, min_views):
+  if len(views) <= 1:
     return list(views)
   selected = list(views)
   drop_idx = rng.randrange(len(selected))
@@ -1319,6 +1339,141 @@ def compute_softdtw_paired(
       "top1": torch.ones((), device=h_seq.device),
       "pos_dist": distances.mean(),
       "off_dist": torch.zeros((), device=h_seq.device),
+  }
+
+
+def sinkhorn_rows_cols(kernel, iters, eps=1e-8):
+  transport = kernel
+  for _ in range(iters):
+    transport = transport / transport.sum(dim=2, keepdim=True).clamp_min(eps)
+    transport = transport / transport.sum(dim=1, keepdim=True).clamp_min(eps)
+  return transport / transport.sum(dim=2, keepdim=True).clamp_min(eps)
+
+
+def make_temporal_prior_cost(num_timestamps, device, dtype):
+  indices = torch.arange(num_timestamps, device=device, dtype=dtype)
+  distance = (indices[:, None] - indices[None]).abs()
+  return distance / max(1, num_timestamps - 1)
+
+
+def make_progress_transition_cost(
+    num_timestamps,
+    max_forward_step,
+    device,
+    dtype,
+):
+  indices = torch.arange(num_timestamps, device=device, dtype=dtype)
+  delta = indices[None] - indices[:, None]
+  max_forward = max_forward_step / max(1, num_timestamps - 1)
+  delta = delta / max(1, num_timestamps - 1)
+  backward = F.relu(-delta)
+  large_forward = F.relu(delta - max_forward)
+  return backward.pow(2) + large_forward.pow(2)
+
+
+def compute_structural_progress_loss(prob, transition_cost):
+  if prob.shape[1] <= 1:
+    return prob.new_zeros(())
+  prev_prob = prob[:, :-1]
+  next_prob = prob[:, 1:]
+  expected_cost = torch.einsum(
+      "bik,kl,bil->bi", prev_prob, transition_cost, next_prob)
+  return expected_cost.mean()
+
+
+def compute_soft_alignment_direction(
+    source_seq,
+    target_seq,
+    temperature,
+    epsilon,
+    rho,
+    sinkhorn_iters,
+    struct_lambda,
+    max_forward_step,
+):
+  source = F.normalize(source_seq.float(), dim=-1)
+  target = F.normalize(target_seq.float(), dim=-1)
+  similarity = torch.einsum("btd,bsd->bts", source, target)
+  pred_log_prob = F.log_softmax(similarity / temperature, dim=2)
+  pred_prob = pred_log_prob.exp()
+
+  cost = 1.0 - similarity
+  temporal_prior = make_temporal_prior_cost(
+      source.shape[1], source.device, source.dtype)
+  teacher_cost = cost + rho * temporal_prior[None]
+  with torch.no_grad():
+    kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
+    teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
+
+  loss_align = -(teacher * pred_log_prob).sum(dim=2).mean()
+  transition_cost = make_progress_transition_cost(
+      source.shape[1],
+      max_forward_step,
+      source.device,
+      source.dtype,
+  )
+  loss_struct = compute_structural_progress_loss(pred_prob, transition_cost)
+  loss = loss_align + struct_lambda * loss_struct
+
+  labels = torch.arange(source.shape[1], device=source.device)
+  top1 = (pred_prob.argmax(dim=2) == labels[None]).float().mean()
+  diagonal = cost.diagonal(dim1=1, dim2=2)
+  off = (cost.sum() - diagonal.sum()) / max(
+      1, cost.numel() - source.shape[0] * source.shape[1])
+  return loss, {
+      "top1": top1,
+      "pos_dist": diagonal.mean(),
+      "off_dist": off,
+      "loss_align": loss_align,
+      "loss_struct": loss_struct,
+  }
+
+
+def compute_soft_alignment_paired(
+    h_seq,
+    r_seq,
+    temperature,
+    epsilon,
+    rho,
+    sinkhorn_iters,
+    struct_lambda,
+    max_forward_step,
+):
+  if h_seq.ndim != 3 or r_seq.ndim != 3:
+    raise ValueError("Soft alignment sequences must have shape [B, T, D].")
+  if h_seq.shape != r_seq.shape:
+    raise ValueError("Soft alignment H/R sequences must have the same shape.")
+
+  loss_hr, metrics_hr = compute_soft_alignment_direction(
+      h_seq,
+      r_seq,
+      temperature,
+      epsilon,
+      rho,
+      sinkhorn_iters,
+      struct_lambda,
+      max_forward_step,
+  )
+  loss_rh, metrics_rh = compute_soft_alignment_direction(
+      r_seq,
+      h_seq,
+      temperature,
+      epsilon,
+      rho,
+      sinkhorn_iters,
+      struct_lambda,
+      max_forward_step,
+  )
+  loss = 0.5 * (loss_hr + loss_rh)
+  return loss, {
+      "distances": None,
+      "top1": 0.5 * (metrics_hr["top1"] + metrics_rh["top1"]),
+      "pos_dist": 0.5 * (metrics_hr["pos_dist"] + metrics_rh["pos_dist"]),
+      "off_dist": 0.5 * (metrics_hr["off_dist"] + metrics_rh["off_dist"]),
+      "align_loss": 0.5 * (
+          metrics_hr["loss_align"] + metrics_rh["loss_align"]),
+      "struct_loss": 0.5 * (
+          metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
   }
 
 
@@ -1636,13 +1791,20 @@ def main() -> None:
         f"fusion_mode={args.fusion_mode} "
         f"backbone={args.backbone} "
         f"softdtw_mode={args.softdtw_mode} "
+        f"soft_alignment_temperature={args.soft_alignment_temperature} "
+        f"soft_alignment_epsilon={args.soft_alignment_epsilon} "
+        f"soft_alignment_rho={args.soft_alignment_rho} "
+        f"soft_alignment_sinkhorn_iters={args.soft_alignment_sinkhorn_iters} "
+        f"soft_alignment_struct_lambda={args.soft_alignment_struct_lambda} "
+        f"soft_alignment_max_forward_step={args.soft_alignment_max_forward_step} "
         f"mv_soft_temporal={args.mv_soft_temporal} "
         f"mv_soft_temporal_alpha={args.mv_soft_temporal_alpha} "
         f"mv_soft_temporal_tau={args.mv_soft_temporal_tau} "
         f"pixel_aug={args.pixel_aug} "
         f"view_mask_mode={args.view_mask_mode} "
         f"view_mask_prob={args.view_mask_prob} "
-        f"view_mask_min_views={args.view_mask_min_views} "
+        f"view_mask_min_views="
+        f"{'auto_drop_one' if args.view_mask_mode == 'drop_one' else args.view_mask_min_views} "
         f"train_backbone_adapters={args.train_backbone_adapters} "
         f"num_camera_slots={num_camera_slots} "
         f"camera_matched_pairing={args.camera_matched_pairing} "
@@ -1708,6 +1870,8 @@ def main() -> None:
         "loss_aux",
         "loss_aux_h",
         "loss_aux_r",
+        "loss_align",
+        "loss_struct",
         "softdtw_top1",
         "softdtw_pos_dist",
         "softdtw_off_dist",
@@ -1867,6 +2031,17 @@ def main() -> None:
               variance_lambda=args.tcc_variance_lambda,
               huber_delta=args.tcc_huber_delta,
           )
+        elif args.softdtw_mode == "soft_alignment":
+          loss_softdtw, metrics = compute_soft_alignment_paired(
+              h_seq,
+              r_seq,
+              temperature=args.soft_alignment_temperature,
+              epsilon=args.soft_alignment_epsilon,
+              rho=args.soft_alignment_rho,
+              sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
+              struct_lambda=args.soft_alignment_struct_lambda,
+              max_forward_step=args.soft_alignment_max_forward_step,
+          )
         else:
           raise ValueError(f"Unknown softdtw_mode: {args.softdtw_mode}")
         if args.fusion_mode == "fixed_slot":
@@ -1948,6 +2123,9 @@ def main() -> None:
           torch.cuda.max_memory_allocated(device) / 1024 / 1024
           if device.type == "cuda" else 0.0)
       emb_std = z_groups.detach().float().std(dim=0).mean().item()
+      align_loss = metrics.get("align_loss", loss_softdtw)
+      struct_loss = metrics.get(
+          "struct_loss", loss_softdtw.new_zeros(()))
       row = [
           step,
           f"{loss.item():.8f}",
@@ -1955,6 +2133,8 @@ def main() -> None:
           f"{loss_aux.item():.8f}",
           f"{loss_aux_h.item():.8f}",
           f"{loss_aux_r.item():.8f}",
+          f"{align_loss.item():.8f}",
+          f"{struct_loss.item():.8f}",
           f"{metrics['top1'].item():.6f}",
           f"{metrics['pos_dist'].item():.8f}",
           f"{metrics['off_dist'].item():.8f}",
@@ -1974,13 +2154,14 @@ def main() -> None:
       if is_main and (step == 1 or step % args.log_every == 0):
         print(
             f"step {step:05d} total={row[1]} sdtw={row[2]} aux={row[3]} "
-            f"sdtw_top1={row[6]} pos/off={row[7]}/{row[8]} "
-            f"aux_top1_h/r={row[9]}/{row[10]} "
-            f"aux_diag_off_h={row[11]}/{row[12]} "
-            f"aux_diag_off_r={row[13]}/{row[14]} "
-            f"emb_std={row[15]} episode_pairs={args.batch_episode_pairs} "
+            f"align={row[6]} struct={row[7]} "
+            f"sdtw_top1={row[8]} pos/off={row[9]}/{row[10]} "
+            f"aux_top1_h/r={row[11]}/{row[12]} "
+            f"aux_diag_off_h={row[13]}/{row[14]} "
+            f"aux_diag_off_r={row[15]}/{row[16]} "
+            f"emb_std={row[17]} episode_pairs={args.batch_episode_pairs} "
             f"imgs={image_count} "
-            f"mem={row[19]}MB sec={row[18]}",
+            f"mem={row[21]}MB sec={row[20]}",
             flush=True,
         )
         f.flush()
