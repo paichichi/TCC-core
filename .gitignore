@@ -3,3 +3,5 @@ __pycache__/
 *.egg-info/
 analysis/
 NESI_result/
+wsl_result/
+downstream/rvt2_lite/runs/
