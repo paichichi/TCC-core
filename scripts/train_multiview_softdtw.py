@@ -447,6 +447,12 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   parser.add_argument("--soft-alignment-sinkhorn-iters", type=int)
   parser.add_argument("--soft-alignment-struct-lambda", type=float)
   parser.add_argument("--soft-alignment-max-forward-step", type=float)
+  parser.add_argument(
+      "--lambda-sa",
+      "--lambda-soft-alignment",
+      dest="lambda_sa",
+      type=float,
+  )
   parser.add_argument("--lambda-mv", type=float)
   parser.add_argument("--mv-temperature", type=float)
   parser.add_argument(
@@ -625,6 +631,8 @@ def parse_args() -> argparse.Namespace:
     args.soft_alignment_struct_lambda = 0.1
   if not hasattr(args, "soft_alignment_max_forward_step"):
     args.soft_alignment_max_forward_step = 1.0
+  if not hasattr(args, "lambda_sa"):
+    args.lambda_sa = 1.0
   if not hasattr(args, "view_token_dropout"):
     args.view_token_dropout = 0.15
   if not hasattr(args, "view_token_noise_std"):
@@ -1797,6 +1805,8 @@ def main() -> None:
         f"soft_alignment_sinkhorn_iters={args.soft_alignment_sinkhorn_iters} "
         f"soft_alignment_struct_lambda={args.soft_alignment_struct_lambda} "
         f"soft_alignment_max_forward_step={args.soft_alignment_max_forward_step} "
+        f"lambda_sa={args.lambda_sa} "
+        f"lambda_mv={args.lambda_mv} "
         f"mv_soft_temporal={args.mv_soft_temporal} "
         f"mv_soft_temporal_alpha={args.mv_soft_temporal_alpha} "
         f"mv_soft_temporal_tau={args.mv_soft_temporal_tau} "
@@ -1872,6 +1882,10 @@ def main() -> None:
         "loss_aux_r",
         "loss_align",
         "loss_struct",
+        "loss_sa_weighted",
+        "loss_aux_weighted",
+        "lambda_sa",
+        "lambda_mv",
         "softdtw_top1",
         "softdtw_pos_dist",
         "softdtw_off_dist",
@@ -2113,7 +2127,9 @@ def main() -> None:
             loss_aux_r, aux_r = compute_multiview_infonce(
                 r_aux_a, r_aux_b, args.mv_temperature)
         loss_aux = 0.5 * (loss_aux_h + loss_aux_r)
-        loss = loss_softdtw + args.lambda_mv * loss_aux
+        loss_sa_weighted = args.lambda_sa * loss_softdtw
+        loss_aux_weighted = args.lambda_mv * loss_aux
+        loss = loss_sa_weighted + loss_aux_weighted
       scaler.scale(loss).backward()
       scaler.step(optimizer)
       scaler.update()
@@ -2135,6 +2151,10 @@ def main() -> None:
           f"{loss_aux_r.item():.8f}",
           f"{align_loss.item():.8f}",
           f"{struct_loss.item():.8f}",
+          f"{loss_sa_weighted.item():.8f}",
+          f"{loss_aux_weighted.item():.8f}",
+          f"{args.lambda_sa:.8f}",
+          f"{args.lambda_mv:.8f}",
           f"{metrics['top1'].item():.6f}",
           f"{metrics['pos_dist'].item():.8f}",
           f"{metrics['off_dist'].item():.8f}",
@@ -2155,13 +2175,14 @@ def main() -> None:
         print(
             f"step {step:05d} total={row[1]} sdtw={row[2]} aux={row[3]} "
             f"align={row[6]} struct={row[7]} "
-            f"sdtw_top1={row[8]} pos/off={row[9]}/{row[10]} "
-            f"aux_top1_h/r={row[11]}/{row[12]} "
-            f"aux_diag_off_h={row[13]}/{row[14]} "
-            f"aux_diag_off_r={row[15]}/{row[16]} "
-            f"emb_std={row[17]} episode_pairs={args.batch_episode_pairs} "
+            f"weighted={row[8]}/{row[9]} "
+            f"sdtw_top1={row[12]} pos/off={row[13]}/{row[14]} "
+            f"aux_top1_h/r={row[15]}/{row[16]} "
+            f"aux_diag_off_h={row[17]}/{row[18]} "
+            f"aux_diag_off_r={row[19]}/{row[20]} "
+            f"emb_std={row[21]} episode_pairs={args.batch_episode_pairs} "
             f"imgs={image_count} "
-            f"mem={row[21]}MB sec={row[20]}",
+            f"mem={row[25]}MB sec={row[24]}",
             flush=True,
         )
         f.flush()
