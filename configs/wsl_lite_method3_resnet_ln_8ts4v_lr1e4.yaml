@@ -1,12 +1,12 @@
 # WSL TCC-core lite run: Method 3 soft alignment, R3M ResNet50 with
-# HR-Align-style late adapters, 8 timestamp groups, 3 views.
+# HR-Align-style late adapters, 8 timestamp groups, 4 views, lr=1e-4.
 
 data_root: /home/paichichi/data/RH20T/TCC_RH20T
 training_index: /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
 pretrain_path: /home/paichichi/data/pretrain/UnadaptedR3M.pt
 output_root: /home/paichichi/projects/TCC-core/wsl_result/tcc_core_runs
 
-run_name: wsl_lite_method3_resnet_ln_8ts3v_b4_i3000
+run_name: wsl_lite_method3_resnet_ln_8ts4v_lr1e4_b4_i3000
 
 backbone: r3m_late_adapter
 train_backbone_adapters: true
@@ -19,13 +19,11 @@ projector_dropout: 0.1
 pixel_aug: false
 view_mask_mode: drop_one
 view_mask_prob: 1.0
-prefetch_batches: 1
-pin_memory: true
-view_mask_min_views: 2
+view_mask_min_views: 3
 
 batch_episode_pairs: 4
 num_timestamps: 8
-num_multi_view: 3
+num_multi_view: 4
 camera_matched_pairing: true
 
 gamma: 0.1
@@ -45,7 +43,7 @@ soft_alignment_struct_lambda: 0.1
 soft_alignment_max_forward_step: 1.0
 softdtw_divergence: true
 
-lr: 0.000075
+lr: 0.0001
 max_iters: 3000
 log_every: 50
 save_every: 3000

@@ -11,7 +11,9 @@ import os
 import random
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import torch
@@ -203,7 +205,23 @@ class ViewSetAttentionSoftDTW(nn.Module):
       tokens_flat: torch.Tensor,
       group_indices: torch.Tensor,
       num_groups: int,
+      uniform_views_per_group: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor]:
+    if uniform_views_per_group is not None:
+      expected = num_groups * uniform_views_per_group
+      if tokens_flat.shape[0] != expected:
+        raise ValueError(
+            "Uniform view packing expected "
+            f"{expected} tokens, got {tokens_flat.shape[0]}.")
+      tokens = tokens_flat.reshape(
+          num_groups, uniform_views_per_group, tokens_flat.shape[-1])
+      mask = torch.ones(
+          (num_groups, uniform_views_per_group),
+          dtype=torch.bool,
+          device=tokens_flat.device,
+      )
+      return tokens, mask
+
     counts = torch.bincount(group_indices, minlength=num_groups)
     max_views = int(counts.max().item())
     tokens = tokens_flat.new_zeros((num_groups, max_views, tokens_flat.shape[-1]))
@@ -229,11 +247,17 @@ class ViewSetAttentionSoftDTW(nn.Module):
       images: torch.Tensor,
       group_indices: torch.Tensor,
       num_groups: int,
+      uniform_views_per_group: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor]:
     feats = self.backbone(images)
     feats = torch.flatten(feats, 1)
     tokens_flat = self.view_norm(self.view_projector(feats))
-    return self._pack_view_tokens(tokens_flat, group_indices, num_groups)
+    return self._pack_view_tokens(
+        tokens_flat,
+        group_indices,
+        num_groups,
+        uniform_views_per_group,
+    )
 
   def augment_view_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
     out = tokens
@@ -274,14 +298,15 @@ class ViewSetAttentionSoftDTW(nn.Module):
       raise ValueError(f"Unknown feature view mask mode: {mode}")
     del min_views
     out = mask.clone()
-    for group_idx in range(out.shape[0]):
-      valid = torch.nonzero(out[group_idx], as_tuple=False).flatten()
-      if valid.numel() <= 1:
-        continue
-      if torch.rand((), device=out.device) >= mask_prob:
-        continue
-      drop_pos = torch.randint(valid.numel(), (1,), device=out.device)
-      out[group_idx, valid[drop_pos]] = False
+    eligible = out.sum(dim=1) > 1
+    if mask_prob < 1.0:
+      eligible = eligible & (
+          torch.rand(out.shape[0], device=out.device) < mask_prob)
+    random_scores = torch.rand(out.shape, device=out.device)
+    random_scores = random_scores.masked_fill(~out, torch.inf)
+    drop_columns = random_scores.argmin(dim=1)
+    drop_rows = torch.nonzero(eligible, as_tuple=False).flatten()
+    out[drop_rows, drop_columns[drop_rows]] = False
     return out
 
   def encode_groups(
@@ -311,9 +336,15 @@ class ViewSetAttentionSoftDTW(nn.Module):
       feature_view_mask_mode: str = "none",
       feature_view_mask_prob: float = 0.0,
       feature_view_mask_min_views: int = 1,
+      uniform_views_per_group: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     del camera_ids
-    tokens, mask = self.encode_view_tokens(images, group_indices, num_groups)
+    tokens, mask = self.encode_view_tokens(
+        images,
+        group_indices,
+        num_groups,
+        uniform_views_per_group,
+    )
     clean = self.attention_pool(tokens, mask, apply_dropout=False)
     z_sdtw = self.projector_sdtw(clean)
     z_aux_clean = self.projector_aux(clean)
@@ -495,6 +526,18 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   parser.add_argument("--weight-decay", type=float)
   parser.add_argument("--seed", type=int)
   parser.add_argument("--image-size", type=int)
+  parser.add_argument(
+      "--prefetch-batches",
+      type=int,
+      choices=(0, 1),
+      help="Prepare one CPU image batch while the current GPU step runs.",
+  )
+  parser.add_argument(
+      "--pin-memory",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help="Stage image batches in pinned CPU memory before CUDA transfer.",
+  )
   parser.add_argument("--device")
   parser.add_argument("--embedding-size", type=int)
   parser.add_argument("--fusion-size", type=int)
@@ -653,6 +696,10 @@ def parse_args() -> argparse.Namespace:
     args.backbone = "vit_b16"
   if not hasattr(args, "train_backbone_adapters"):
     args.train_backbone_adapters = False
+  if not hasattr(args, "prefetch_batches"):
+    args.prefetch_batches = 0
+  if not hasattr(args, "pin_memory"):
+    args.pin_memory = False
   return coerce_path_args(args)
 
 
@@ -1019,6 +1066,77 @@ def sample_episode_batch(
   return selected
 
 
+def sample_paired_sequences(
+    paired_tracks,
+    episode_ids: list[str],
+    task_to_episodes: dict[str, list[str]],
+    batch_episode_pairs: int,
+    num_timestamps: int,
+    num_multi_view: int,
+    camera_matched_pairing: bool,
+    rng: random.Random,
+) -> list[list[Group]]:
+  batch_episode_ids = sample_episode_batch(
+      episode_ids,
+      task_to_episodes,
+      batch_episode_pairs,
+      True,
+      rng,
+  )
+  human_sequences = []
+  robot_sequences = []
+  for eid in batch_episode_ids:
+    if camera_matched_pairing:
+      combo_rec = rng.choice(paired_tracks[eid]["shared_combos"])
+      if isinstance(combo_rec, dict):
+        if "h" in combo_rec:
+          h_groups = combo_rec["h"]
+          r_groups = combo_rec["r"]
+        else:
+          combo = combo_rec["camera_ids"]
+          h_groups = materialize_combo_groups(
+              paired_tracks[eid]["h_group_pool"],
+              combo_rec["h_group_indices"],
+              combo,
+              eid,
+              paired_tracks[eid]["task_id"],
+              "h",
+          )
+          r_groups = materialize_combo_groups(
+              paired_tracks[eid]["r_group_pool"],
+              combo_rec["r_group_indices"],
+              combo,
+              eid,
+              paired_tracks[eid]["task_id"],
+              "r",
+          )
+      else:
+        h_groups = filter_groups_to_camera_combo(
+            paired_tracks[eid]["h"], combo_rec)
+        r_groups = filter_groups_to_camera_combo(
+            paired_tracks[eid]["r"], combo_rec)
+    else:
+      h_groups = paired_tracks[eid]["h"]
+      r_groups = paired_tracks[eid]["r"]
+    human_sequences.append(
+        stratified_group_sample(h_groups, num_timestamps, rng))
+    robot_sequences.append(
+        stratified_group_sample(r_groups, num_timestamps, rng))
+  sequences = human_sequences + robot_sequences
+  if camera_matched_pairing:
+    invalid = [
+        len(group.views)
+        for sequence in sequences
+        for group in sequence
+        if len(group.views) != num_multi_view
+    ]
+    if invalid:
+      raise ValueError(
+          "Camera-matched sampling produced non-uniform view counts: "
+          f"expected {num_multi_view}, got {invalid[:8]}.")
+  return sequences
+
+
 def make_transform(image_size: int):
   return transforms.Compose([
       transforms.Resize((image_size, image_size), antialias=True),
@@ -1086,6 +1204,19 @@ def load_image(root: Path, rel_path: str, transform) -> torch.Tensor:
     return transform(image.convert("RGB"))
 
 
+def move_batch_tensor(
+    tensor: torch.Tensor,
+    device: torch.device,
+    pin_memory: bool,
+) -> torch.Tensor:
+  if device.type == "cpu":
+    return tensor.pin_memory() if pin_memory else tensor
+  use_pinned_memory = pin_memory and device.type == "cuda"
+  if use_pinned_memory and not tensor.is_pinned():
+    tensor = tensor.pin_memory()
+  return tensor.to(device, non_blocking=use_pinned_memory)
+
+
 def sample_view_subset(
     views: list[ViewRef],
     max_views: int,
@@ -1141,20 +1272,22 @@ def prepare_batch_images(
     sequences: list[list[Group]],
     transform,
     device,
+    pin_memory: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-  images = []
+  views = []
   group_indices = []
   camera_ids = []
   group_idx = 0
   for sequence in sequences:
     for group in sequence:
       for view in group.views:
-        images.append(load_image(root, view.rel_path, transform))
+        views.append(view)
         group_indices.append(group_idx)
         camera_ids.append(view.camera_id)
       group_idx += 1
+  images = [load_image(root, view.rel_path, transform) for view in views]
   return (
-      torch.stack(images, dim=0).to(device),
+      move_batch_tensor(torch.stack(images, dim=0), device, pin_memory),
       torch.tensor(group_indices, dtype=torch.long, device=device),
       torch.tensor(camera_ids, dtype=torch.long, device=device),
       group_idx,
@@ -1191,6 +1324,7 @@ def prepare_clean_aug_batch_images(
     view_mask_prob: float,
     view_mask_min_views: int,
     rng: random.Random,
+    pin_memory: bool = False,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -1200,17 +1334,17 @@ def prepare_clean_aug_batch_images(
     torch.Tensor,
     int,
 ]:
-  clean_images = []
+  clean_views = []
   clean_group_indices = []
   clean_camera_ids = []
-  aug_images = []
+  aug_views = []
   aug_group_indices = []
   aug_camera_ids = []
   group_idx = 0
   for sequence in sequences:
     for group in sequence:
       for view in group.views:
-        clean_images.append(load_image(root, view.rel_path, clean_transform))
+        clean_views.append(view)
         clean_group_indices.append(group_idx)
         clean_camera_ids.append(view.camera_id)
       masked_views = sample_masked_views(
@@ -1221,15 +1355,21 @@ def prepare_clean_aug_batch_images(
           rng,
       )
       for view in masked_views:
-        aug_images.append(load_image(root, view.rel_path, aug_transform))
+        aug_views.append(view)
         aug_group_indices.append(group_idx)
         aug_camera_ids.append(view.camera_id)
       group_idx += 1
+  clean_images = [
+      load_image(root, view.rel_path, clean_transform) for view in clean_views
+  ]
+  aug_images = [
+      load_image(root, view.rel_path, aug_transform) for view in aug_views
+  ]
   return (
-      torch.stack(clean_images, dim=0).to(device),
+      move_batch_tensor(torch.stack(clean_images, dim=0), device, pin_memory),
       torch.tensor(clean_group_indices, dtype=torch.long, device=device),
       torch.tensor(clean_camera_ids, dtype=torch.long, device=device),
-      torch.stack(aug_images, dim=0).to(device),
+      move_batch_tensor(torch.stack(aug_images, dim=0), device, pin_memory),
       torch.tensor(aug_group_indices, dtype=torch.long, device=device),
       torch.tensor(aug_camera_ids, dtype=torch.long, device=device),
       group_idx,
@@ -1265,8 +1405,9 @@ def prepare_subset_batch_images(
     subset_sequences: list[list[tuple[list[ViewRef], list[ViewRef]]]],
     transform,
     device,
+    pin_memory: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
-  images = []
+  views = []
   group_indices = []
   subset_indices = []
   camera_ids = []
@@ -1275,13 +1416,14 @@ def prepare_subset_batch_images(
     for subset_a, subset_b in sequence:
       for subset_idx, subset in enumerate([subset_a, subset_b]):
         for view in subset:
-          images.append(load_image(root, view.rel_path, transform))
+          views.append(view)
           group_indices.append(group_idx)
           subset_indices.append(subset_idx)
           camera_ids.append(view.camera_id)
       group_idx += 1
+  images = [load_image(root, view.rel_path, transform) for view in views]
   return (
-      torch.stack(images, dim=0).to(device),
+      move_batch_tensor(torch.stack(images, dim=0), device, pin_memory),
       torch.tensor(group_indices, dtype=torch.long, device=device),
       torch.tensor(subset_indices, dtype=torch.long, device=device),
       torch.tensor(camera_ids, dtype=torch.long, device=device),
@@ -1358,10 +1500,33 @@ def sinkhorn_rows_cols(kernel, iters, eps=1e-8):
   return transport / transport.sum(dim=2, keepdim=True).clamp_min(eps)
 
 
-def make_temporal_prior_cost(num_timestamps, device, dtype):
+@lru_cache(maxsize=32)
+def _cached_temporal_prior_cost(num_timestamps, device_str, dtype):
+  device = torch.device(device_str)
   indices = torch.arange(num_timestamps, device=device, dtype=dtype)
   distance = (indices[:, None] - indices[None]).abs()
   return distance / max(1, num_timestamps - 1)
+
+
+def make_temporal_prior_cost(num_timestamps, device, dtype):
+  return _cached_temporal_prior_cost(num_timestamps, str(device), dtype)
+
+
+@lru_cache(maxsize=32)
+def _cached_progress_transition_cost(
+    num_timestamps,
+    max_forward_step,
+    device_str,
+    dtype,
+):
+  device = torch.device(device_str)
+  indices = torch.arange(num_timestamps, device=device, dtype=dtype)
+  delta = indices[None] - indices[:, None]
+  max_forward = max_forward_step / max(1, num_timestamps - 1)
+  delta = delta / max(1, num_timestamps - 1)
+  backward = F.relu(-delta)
+  large_forward = F.relu(delta - max_forward)
+  return backward.pow(2) + large_forward.pow(2)
 
 
 def make_progress_transition_cost(
@@ -1370,13 +1535,12 @@ def make_progress_transition_cost(
     device,
     dtype,
 ):
-  indices = torch.arange(num_timestamps, device=device, dtype=dtype)
-  delta = indices[None] - indices[:, None]
-  max_forward = max_forward_step / max(1, num_timestamps - 1)
-  delta = delta / max(1, num_timestamps - 1)
-  backward = F.relu(-delta)
-  large_forward = F.relu(delta - max_forward)
-  return backward.pow(2) + large_forward.pow(2)
+  return _cached_progress_transition_cost(
+      num_timestamps,
+      max_forward_step,
+      str(device),
+      dtype,
+  )
 
 
 def compute_structural_progress_loss(prob, transition_cost):
@@ -1623,13 +1787,13 @@ def compute_hr_vvcl(
 ):
   h_global = F.normalize(h_seq.mean(dim=1), dim=-1)
   r_global = F.normalize(r_seq.mean(dim=1), dim=-1)
-  logits = (h_global @ r_global.t()) / temperature
+  sims = h_global @ r_global.t()
+  logits = sims / temperature
   labels = torch.arange(logits.shape[0], device=logits.device)
   loss = 0.5 * (
       F.cross_entropy(logits, labels) +
       F.cross_entropy(logits.t(), labels)
   )
-  sims = h_global @ r_global.t()
   top1_hr = (sims.argmax(dim=1) == labels).float().mean()
   top1_rh = (sims.argmax(dim=0) == labels).float().mean()
   diag = sims.diag().mean()
@@ -1647,13 +1811,13 @@ def compute_multiview_infonce(
     z_b,
     temperature,
 ):
-  logits = (z_a @ z_b.t()) / temperature
+  sims = z_a @ z_b.t()
+  logits = sims / temperature
   labels = torch.arange(logits.shape[0], device=logits.device)
   loss = 0.5 * (
       F.cross_entropy(logits, labels) +
       F.cross_entropy(logits.t(), labels)
   )
-  sims = z_a @ z_b.t()
   top1_ab = (sims.argmax(dim=1) == labels).float().mean()
   top1_ba = (sims.argmax(dim=0) == labels).float().mean()
   diag = sims.diag().mean()
@@ -1664,6 +1828,31 @@ def compute_multiview_infonce(
       "diag": diag,
       "off": off,
   }
+
+
+@lru_cache(maxsize=32)
+def _cached_soft_temporal_target(
+    num_sequences,
+    num_timestamps,
+    alpha,
+    tau,
+    device_str,
+    dtype,
+):
+  device = torch.device(device_str)
+  expected = num_sequences * num_timestamps
+  sequence_ids = torch.arange(expected, device=device) // num_timestamps
+  positions = torch.arange(expected, device=device) % num_timestamps
+  same_sequence = sequence_ids[:, None] == sequence_ids[None]
+  temporal_dist = (positions[:, None] - positions[None]).abs().float()
+  temporal_target = torch.exp(-temporal_dist / tau)
+  temporal_target = temporal_target.masked_fill(~same_sequence, 0.0)
+  temporal_target = temporal_target / temporal_target.sum(dim=1, keepdim=True)
+  hard_target = torch.eye(expected, device=device, dtype=dtype)
+  return (
+      (1.0 - alpha) * hard_target
+      + alpha * temporal_target.to(dtype)
+  )
 
 
 def compute_soft_temporal_infonce(
@@ -1684,22 +1873,21 @@ def compute_soft_temporal_infonce(
   if alpha < 0 or alpha > 1:
     raise ValueError("--mv-soft-temporal-alpha must be in [0, 1].")
 
-  logits = (z_a @ z_b.t()) / temperature
-  sequence_ids = torch.arange(expected, device=z_a.device) // num_timestamps
-  positions = torch.arange(expected, device=z_a.device) % num_timestamps
-  same_sequence = sequence_ids[:, None] == sequence_ids[None]
-  temporal_dist = (positions[:, None] - positions[None]).abs().float()
-  temporal_target = torch.exp(-temporal_dist / tau)
-  temporal_target = temporal_target.masked_fill(~same_sequence, 0.0)
-  temporal_target = temporal_target / temporal_target.sum(dim=1, keepdim=True)
-  hard_target = torch.eye(expected, device=z_a.device, dtype=z_a.dtype)
-  target = (1.0 - alpha) * hard_target + alpha * temporal_target.to(z_a.dtype)
+  sims = z_a @ z_b.t()
+  logits = sims / temperature
+  target = _cached_soft_temporal_target(
+      num_sequences,
+      num_timestamps,
+      alpha,
+      tau,
+      str(z_a.device),
+      z_a.dtype,
+  )
 
   loss_ab = -(target * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
   loss_ba = -(target * F.log_softmax(logits.t(), dim=1)).sum(dim=1).mean()
   loss = 0.5 * (loss_ab + loss_ba)
 
-  sims = z_a @ z_b.t()
   labels = torch.arange(expected, device=z_a.device)
   top1_ab = (sims.argmax(dim=1) == labels).float().mean()
   top1_ba = (sims.argmax(dim=0) == labels).float().mean()
@@ -1815,6 +2003,8 @@ def main() -> None:
         f"view_mask_prob={args.view_mask_prob} "
         f"view_mask_min_views="
         f"{'auto_drop_one' if args.view_mask_mode == 'drop_one' else args.view_mask_min_views} "
+        f"prefetch_batches={args.prefetch_batches} "
+        f"pin_memory={args.pin_memory} "
         f"train_backbone_adapters={args.train_backbone_adapters} "
         f"num_camera_slots={num_camera_slots} "
         f"camera_matched_pairing={args.camera_matched_pairing} "
@@ -1869,6 +2059,43 @@ def main() -> None:
   )
   scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
+  use_prefetch = args.prefetch_batches == 1
+  uniform_views_per_group = (
+      args.num_multi_view if args.camera_matched_pairing else None)
+  if use_prefetch and (
+      args.fusion_mode != "attention_pool" or args.pixel_aug
+  ):
+    raise ValueError(
+        "Batch prefetch currently requires attention_pool with pixel_aug=false.")
+
+  def sample_sequences() -> list[list[Group]]:
+    return sample_paired_sequences(
+        paired_tracks,
+        episode_ids,
+        task_to_episodes,
+        args.batch_episode_pairs,
+        args.num_timestamps,
+        args.num_multi_view,
+        args.camera_matched_pairing,
+        rng,
+    )
+
+  prefetch_executor = None
+  prefetch_future = None
+  if use_prefetch:
+    prefetch_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="batch-prefetch",
+    )
+    prefetch_future = prefetch_executor.submit(
+        prepare_batch_images,
+        args.data_root,
+        sample_sequences(),
+        transform,
+        torch.device("cpu"),
+        args.pin_memory,
+    )
+
   csv_name = "losses.csv" if is_main else f"losses_rank{rank}.csv"
   csv_path = args.out_dir / csv_name
   with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -1906,52 +2133,29 @@ def main() -> None:
     start = time.time()
     for step in range(1, args.max_iters + 1):
       iter_start = time.time()
-      batch_episode_ids = sample_episode_batch(
-          episode_ids,
-          task_to_episodes,
-          args.batch_episode_pairs,
-          True,
-          rng,
-      )
-      human_sequences = []
-      robot_sequences = []
-      for eid in batch_episode_ids:
-        if args.camera_matched_pairing:
-          combo_rec = rng.choice(paired_tracks[eid]["shared_combos"])
-          if isinstance(combo_rec, dict):
-            if "h" in combo_rec:
-              h_groups = combo_rec["h"]
-              r_groups = combo_rec["r"]
-            else:
-              combo = combo_rec["camera_ids"]
-              h_groups = materialize_combo_groups(
-                  paired_tracks[eid]["h_group_pool"],
-                  combo_rec["h_group_indices"],
-                  combo,
-                  eid,
-                  paired_tracks[eid]["task_id"],
-                  "h",
-              )
-              r_groups = materialize_combo_groups(
-                  paired_tracks[eid]["r_group_pool"],
-                  combo_rec["r_group_indices"],
-                  combo,
-                  eid,
-                  paired_tracks[eid]["task_id"],
-                  "r",
-              )
-          else:
-            h_groups = filter_groups_to_camera_combo(paired_tracks[eid]["h"], combo_rec)
-            r_groups = filter_groups_to_camera_combo(paired_tracks[eid]["r"], combo_rec)
-        else:
-          h_groups = paired_tracks[eid]["h"]
-          r_groups = paired_tracks[eid]["r"]
-        human_sequences.append(
-            stratified_group_sample(h_groups, args.num_timestamps, rng))
-        robot_sequences.append(
-            stratified_group_sample(r_groups, args.num_timestamps, rng))
-      all_sequences = human_sequences + robot_sequences
-      if args.fusion_mode == "fixed_slot":
+      if use_prefetch:
+        if prefetch_future is None:
+          raise RuntimeError("Missing prefetched image batch.")
+        images, group_idx, camera_ids, num_groups = prefetch_future.result()
+        if step < args.max_iters:
+          prefetch_future = prefetch_executor.submit(
+              prepare_batch_images,
+              args.data_root,
+              sample_sequences(),
+              transform,
+              torch.device("cpu"),
+              args.pin_memory,
+          )
+        images = move_batch_tensor(images, device, args.pin_memory)
+        if uniform_views_per_group is None:
+          group_idx = group_idx.to(device, non_blocking=args.pin_memory)
+        aug_images = None
+        aug_group_idx = None
+        aug_camera_ids = None
+      else:
+        all_sequences = sample_sequences()
+
+      if not use_prefetch and args.fusion_mode == "fixed_slot":
         subset_sequences = make_view_dropout_sequences(
             all_sequences,
             args.num_multi_view,
@@ -1960,8 +2164,13 @@ def main() -> None:
             rng=rng,
         )
         images, group_idx, subset_idx, camera_ids, num_groups = prepare_subset_batch_images(
-            args.data_root, subset_sequences, transform, device)
-      elif args.fusion_mode == "attention_pool":
+            args.data_root,
+            subset_sequences,
+            transform,
+            device,
+            pin_memory=args.pin_memory,
+        )
+      elif not use_prefetch and args.fusion_mode == "attention_pool":
         if args.pixel_aug:
           (
               images,
@@ -1981,14 +2190,20 @@ def main() -> None:
               args.view_mask_prob,
               args.view_mask_min_views,
               rng,
+              pin_memory=args.pin_memory,
           )
         else:
           images, group_idx, camera_ids, num_groups = prepare_batch_images(
-              args.data_root, all_sequences, transform, device)
+              args.data_root,
+              all_sequences,
+              transform,
+              device,
+              pin_memory=args.pin_memory,
+          )
           aug_images = None
           aug_group_idx = None
           aug_camera_ids = None
-      else:
+      elif not use_prefetch:
         raise ValueError(f"Unknown fusion_mode: {args.fusion_mode}")
       image_count = images.shape[0]
       if args.fusion_mode == "attention_pool" and aug_images is not None:
@@ -2014,6 +2229,7 @@ def main() -> None:
                   args.view_mask_mode if not args.pixel_aug else "none"),
               feature_view_mask_prob=args.view_mask_prob,
               feature_view_mask_min_views=args.view_mask_min_views,
+              uniform_views_per_group=uniform_views_per_group,
           )
         z = z_groups.reshape(
             2 * args.batch_episode_pairs, args.num_timestamps, -1)
@@ -2198,6 +2414,8 @@ def main() -> None:
         )
     if is_main:
       print(f"done in {time.time() - start:.1f}s; losses={csv_path}")
+  if prefetch_executor is not None:
+    prefetch_executor.shutdown(wait=True)
   cleanup_distributed(distributed)
 
 

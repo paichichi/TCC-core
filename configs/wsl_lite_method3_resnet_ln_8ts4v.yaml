@@ -19,6 +19,8 @@ projector_dropout: 0.1
 pixel_aug: false
 view_mask_mode: drop_one
 view_mask_prob: 1.0
+prefetch_batches: 1
+pin_memory: true
 view_mask_min_views: 3
 
 batch_episode_pairs: 4
