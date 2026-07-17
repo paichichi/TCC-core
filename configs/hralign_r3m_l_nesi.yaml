@@ -1,0 +1,59 @@
+data:
+  root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
+  lookup: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T/lookup.csv
+  manifest: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T/manifest.csv
+  task_descriptions: metadata/rh20t_task_descriptions.json
+  max_pairs: 56000
+  subset_seed: 0
+
+sampling:
+  num_frames: 5
+  frame_index_mode: compact
+  mode: slowfast_clip
+  sampling_rate: 12
+  source_fps: 10
+  target_fps: 30
+  train_jitter_scales: [256, 320]
+  crop_size: 224
+  random_horizontal_flip: true
+
+model:
+  pretrain: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
+  # Checkpoint-informed default; see docs/REPRODUCTION_AUDIT.md.
+  adapted_bn_mode: robot_stats
+  normalize_language_query: false
+  normalize_visual_tokens_for_attention: false
+  normalize_pooled_features: true
+
+text:
+  tokenizer_name: distilbert-base-uncased
+  cache_dir: ""
+  local_files_only: false
+  cache_by_text: false
+  embeddings: ""
+
+loss:
+  temperature: 0.1
+
+train:
+  output_dir: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/runs/hralign_r3m_l_reproduction
+  seed: 0
+  batch_size_per_gpu: 50
+  expected_global_batch_size: 200
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  # Paper target, not the released 2830-step intermediate snapshot.
+  max_steps: 8000
+  learning_rate: 0.0001
+  end_lr: 0.000001
+  weight_decay: 0.0001
+  zero_weight_decay_1d: true
+  grad_clip_norm: 1.0
+  warmup_start_lr: 0.000001
+  warmup_steps: 2800
+  schedule_total_steps: 84000
+  amp: false
+  log_every: 10
+  save_every: 1000
+  resume: ""

@@ -1,0 +1,75 @@
+# Paper/release target: R3M-Align-L on RH20T.
+data:
+  root: /home/paichichi/data/RH20T/TCC_RH20T
+  lookup: /home/paichichi/data/RH20T/TCC_RH20T/lookup.csv
+  manifest: /home/paichichi/data/RH20T/TCC_RH20T/manifest.csv
+  task_descriptions: metadata/rh20t_task_descriptions.json
+  # The exact authors' 56k subset was not released. This is a deterministic
+  # random subset of the available same-camera H/R pairs.
+  max_pairs: 56000
+  subset_seed: 0
+
+sampling:
+  num_frames: 5
+  # TCC_RH20T exports every cropped sequence as 000000.jpg, 000001.jpg, ...
+  # Use manifest_offset only with a dataset that preserves original frame IDs.
+  frame_index_mode: compact
+  # Reconstructed from the released checkpoint: NUM_FRAMES=5,
+  # SAMPLING_RATE=12, TARGET_FPS=30. RH20T RGB is 10 Hz.
+  mode: slowfast_clip
+  sampling_rate: 12
+  source_fps: 10
+  target_fps: 30
+  train_jitter_scales: [256, 320]
+  crop_size: 224
+  random_horizontal_flip: true
+
+model:
+  pretrain: /home/paichichi/data/pretrain/UnadaptedR3M.pt
+  # All learned backbone parameters remain frozen. The release changes all
+  # ResNet-50 BN buffers; robot_stats is the checkpoint-informed default.
+  adapted_bn_mode: robot_stats
+  # "lang.feat.norm" appears in the released run metadata. The paper does not
+  # explicitly specify normalization, so this remains a documented inference.
+  normalize_language_query: false
+  normalize_visual_tokens_for_attention: false
+  normalize_pooled_features: true
+
+text:
+  tokenizer_name: distilbert-base-uncased
+  cache_dir: ""
+  local_files_only: false
+  # false reproduces R3M's batch-padded, unmasked token mean. true is faster
+  # but changes that padding-dependent detail.
+  cache_by_text: false
+  embeddings: ""
+
+loss:
+  temperature: 0.1
+
+train:
+  output_dir: runs/hralign_r3m_l
+  seed: 0
+  # Strict paper batch: torchrun with 4 GPUs and 50 pairs per GPU.
+  batch_size_per_gpu: 50
+  expected_global_batch_size: 200
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  # Paper target. The released public snapshot is at optimizer step 2830 and
+  # references an unavailable 30-epoch predecessor checkpoint.
+  max_steps: 8000
+  learning_rate: 0.0001
+  end_lr: 0.000001
+  weight_decay: 0.0001
+  zero_weight_decay_1d: true
+  grad_clip_norm: 1.0
+  # Released cfg: 10 warmup epochs and 300 schedule epochs. At 56k/200 this
+  # corresponds to roughly 2.8k and 84k optimizer steps.
+  warmup_start_lr: 0.000001
+  warmup_steps: 2800
+  schedule_total_steps: 84000
+  amp: false
+  log_every: 10
+  save_every: 1000
+  resume: ""
