@@ -473,6 +473,14 @@ def _train(
                 f"{actual_global_batch}. Gradient accumulation cannot recreate "
                 "the missing in-batch negatives."
             )
+        elif context.world_size != 4 or batch_size != 50:
+            print(
+                "WARNING: the global contrastive batch matches the paper, but "
+                "the execution geometry is not 4 GPUs x 50 pairs. Active "
+                "BatchNorm statistics and R3M's batch-padded text embeddings "
+                "depend on the per-rank batch, so this is not numerically "
+                "equivalent to the reported run."
+            )
 
     csv_handle = None
     csv_writer = None

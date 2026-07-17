@@ -279,7 +279,8 @@ The released checkpoint further shows:
 - optimizer first moments for all `D_mapping` tensors remain zero;
 - all three `D_fc1` biases remain zero;
 - all three `D_mapping` biases remain zero;
-- all three `D_fc2` biases are learned and are mutually identical.
+- all three `D_fc2` biases are learned and numerically near-identical
+  (maximum pairwise difference below `3e-9`), though not bitwise equal.
 
 `D_fc1` and `D_fc2` weights have non-zero Adam moments, but this is consistent
 with coupled Adam weight decay acting on random non-zero weights even when
@@ -642,6 +643,21 @@ The code does not use four independent local losses with only 49 negatives.
 The repository also includes a two-process numerical audit that compares the
 DDP parameter gradient against one single-process global batch.
 
+That gradient equivalence does not make `1 x 200` numerically identical to the
+paper's `4 x 50` execution geometry. Two batch-local operations differ:
+
+1. With no synchronized BN, every official rank computes visual features from
+   50 pairs (250 frames per visual stream), while a single-GPU batch of 200 uses
+   1,000 frames per stream for BatchNorm2d.
+2. R3M averages the DistilBERT padded token dimension without masking it.
+   Padding is therefore determined by 50 local task descriptions in the
+   reported run, rather than all 200 descriptions at once.
+
+The global contrastive candidate set and DDP trainable-parameter gradient are
+correct in both cases, but the visual and language features are not guaranteed
+to match. The closest hardware-semantic reproduction remains four processes
+with 50 pairs per process.
+
 BN is not synchronized because the released config says:
 
 ```text
@@ -741,7 +757,7 @@ baseline.
 The implementation has passed:
 
 ```text
-20 unit tests
+21 unit tests
 real RH20T image forward/backward
 real R3M DistilBERT forward
 full one-step trainer and final export

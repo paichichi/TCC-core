@@ -157,6 +157,19 @@ def main() -> None:
         if ".D_mapping." in key and torch.count_nonzero(value).item() == 0
     ]
     print(f"zero_D_mapping_tensors: {len(zero_mapping)}/6")
+    fc2_biases = [
+        adapted[f"convnet.late_adapter_{index}.D_fc2.bias"]
+        for index in (1, 2, 3)
+    ]
+    maximum_bias_difference = max(
+        (fc2_biases[left] - fc2_biases[right]).abs().max().item()
+        for left in range(3)
+        for right in range(left + 1, 3)
+    )
+    print(
+        "D_fc2_bias_max_pairwise_difference: "
+        f"{maximum_bias_difference:.9e}"
+    )
 
     raw_config = adapted_checkpoint.get("cfg")
     if isinstance(raw_config, str):

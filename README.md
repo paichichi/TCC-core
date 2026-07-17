@@ -201,6 +201,13 @@ The paper uses 4 GPUs, 50 pairs per GPU, and global batch 200. Global batch is
 part of the method because all other pairs become negatives. Gradient
 accumulation does not recreate those missing negatives.
 
+Using one GPU with batch 200 preserves the global candidate count, but it is not
+numerically identical to 4 GPUs with 50 pairs each. The released checkpoint
+shows that ResNet BatchNorm2d running statistics were updated, and R3M computes
+its unmasked text mean after padding each rank's local text batch. For the
+closest reproduction, keep the original `4 x 50` execution geometry; use
+`1 x 200` as a practical single-GPU reproduction and label it accordingly.
+
 Verify that differentiable global gather plus DDP has the same gradient as a
 single-process global batch:
 
