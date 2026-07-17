@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
+.codex-worktrees/
 analysis/
 NESI_result/
 wsl_result/

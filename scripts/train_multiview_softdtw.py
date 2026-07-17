@@ -2403,12 +2403,18 @@ def main() -> None:
         )
         f.flush()
       if is_main and args.save_every and step % args.save_every == 0:
+        model_format = {}
+        adapter_layout = getattr(
+            raw_model.backbone, "adapter_layout", None)
+        if adapter_layout is not None:
+          model_format["r3m_late_adapter_layout"] = adapter_layout
         torch.save(
             {
                 "step": step,
                 "model": raw_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "args": vars(args),
+                "model_format": model_format,
             },
             args.out_dir / f"checkpoint_{step:06d}.pt",
         )

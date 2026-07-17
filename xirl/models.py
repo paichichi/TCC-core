@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import models
+
+
+R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"
 
 
 def _unwrap_state_dict(checkpoint):
@@ -136,7 +138,7 @@ class ViTB16Backbone(nn.Module):
 
 
 class HRAlignLateAdapter(nn.Module):
-  """Late grouped 1x1 adapter used by the released AdaptedR3M checkpoint."""
+  """Exact late grouped 1x1 adapter from the official HR-Align source."""
 
   def __init__(
       self,
@@ -162,26 +164,33 @@ class HRAlignLateAdapter(nn.Module):
         kernel_size=1,
         groups=groups,
     )
+    self.act = nn.ReLU()
+
+    nn.init.zeros_(self.D_mapping.weight)
+    nn.init.zeros_(self.D_mapping.bias)
+    nn.init.zeros_(self.D_fc1.bias)
+    nn.init.zeros_(self.D_fc2.bias)
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
-    x = F.relu(self.D_fc1(x), inplace=True)
-    x = F.relu(self.D_mapping(x), inplace=True)
-    return self.D_fc2(x)
+    residual = self.act(self.D_fc1(x))
+    residual = self.act(self.D_mapping(residual))
+    residual = self.D_fc2(residual)
+    return x + residual
 
 
 class HRAlignR3MBackbone(nn.Module):
-  """ResNet50/R3M backbone with HR-Align-style late adapters.
+  """ResNet50/R3M backbone with release-compatible HR-Align late adapters.
 
-  The public HR-Align code is not available, so this mirrors the structure
-  implied by AdaptedR3M.pyth:
+  This follows the official downstream source and AdaptedR3M.pyth:
     - convnet.* ResNet50 weights
     - convnet.late_adapter_{1,2,3}.D_fc{1,2}/D_mapping
     - MODEL.ADAPTER: late.layer.3.k.1.down.4.g.8
 
-  We insert one residual adapter after each layer4 bottleneck block.
+  All three residual adapters run sequentially after the complete layer4.
   """
 
   output_dim = 2048
+  adapter_layout = R3M_LATE_ADAPTER_LAYOUT
 
   def __init__(
       self,
@@ -197,7 +206,6 @@ class HRAlignR3MBackbone(nn.Module):
     self.convnet.late_adapter_1 = HRAlignLateAdapter()
     self.convnet.late_adapter_2 = HRAlignLateAdapter()
     self.convnet.late_adapter_3 = HRAlignLateAdapter()
-    self._zero_init_late_adapter_outputs()
 
     if pretrain_path:
       self.load_pretrained(pretrain_path)
@@ -225,15 +233,6 @@ class HRAlignR3MBackbone(nn.Module):
     for module in self.modules():
       if isinstance(module, nn.BatchNorm2d):
         module.eval()
-
-  def _zero_init_late_adapter_outputs(self) -> None:
-    for adapter in (
-        self.convnet.late_adapter_1,
-        self.convnet.late_adapter_2,
-        self.convnet.late_adapter_3,
-    ):
-      nn.init.zeros_(adapter.D_fc2.weight)
-      nn.init.zeros_(adapter.D_fc2.bias)
 
   def train(self, mode: bool = True):
     super().train(mode)
@@ -295,13 +294,10 @@ class HRAlignR3MBackbone(nn.Module):
     x = self.convnet.layer1(x)
     x = self.convnet.layer2(x)
     x = self.convnet.layer3(x)
-
-    x = self.convnet.layer4[0](x)
-    x = x + self.convnet.late_adapter_1(x)
-    x = self.convnet.layer4[1](x)
-    x = x + self.convnet.late_adapter_2(x)
-    x = self.convnet.layer4[2](x)
-    x = x + self.convnet.late_adapter_3(x)
+    x = self.convnet.layer4(x)
+    x = self.convnet.late_adapter_1(x)
+    x = self.convnet.late_adapter_2(x)
+    x = self.convnet.late_adapter_3(x)
 
     x = self.convnet.avgpool(x)
     return torch.flatten(x, 1)

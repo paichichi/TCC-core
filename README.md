@@ -26,6 +26,21 @@ Install PyTorch:
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
+For the local RTX 5090 (`sm_120`), the validated isolated environment is:
+
+```bash
+conda create -n tcc-core-sm120 python=3.10 pip -y
+conda activate tcc-core-sm120
+python -m pip install torch==2.11.0 torchvision==0.26.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+python -m pip install numpy pillow pyyaml pytest
+python -m pip install -e . --no-deps
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_arch_list())"
+```
+
+The verified architecture list includes `sm_120`. Keep the older `tcc-core`
+environment unchanged for historical runs.
+
 Install project dependencies:
 
 ```bash
@@ -192,6 +207,18 @@ args = ckpt["args"]
 ```
 
 For RVT transfer, the main object you need is `ckpt["model"]`.
+
+New R3M late-adapter checkpoints also contain:
+
+```python
+ckpt["model_format"]["r3m_late_adapter_layout"]
+# post_layer4_sequential_v1
+```
+
+ResNet late-adapter checkpoints without this field use the legacy,
+shape-compatible but computation-incompatible adapter placement. Retrain those
+upstream checkpoints before treating them as the release-compatible Method 3
+ResNet result. ViT checkpoints are unaffected.
 
 ## 8. Core Files
 
