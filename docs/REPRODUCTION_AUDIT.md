@@ -82,9 +82,11 @@ r_i^t = T(sample(R_i))
 `F` is original frozen R3M. `T` is the adapted robot encoder formed by adding
 late adapters to `F`.
 
-This implementation keeps a frozen reference copy for `h_i^f` and `r_i^f`,
-plus an adapted copy for `r_i^t`. Backbone parameters never receive
-gradients.
+The paper marks the R3M weights as shared. This implementation therefore uses
+one R3M instance for all three streams. It evaluates the base backbone
+separately for human, frozen robot, and adapted robot, then applies the three
+late adapters only to the final robot base features. Backbone parameters never
+receive gradients.
 
 ### 3.3 Task-aware pooling
 
@@ -320,19 +322,46 @@ comes from SlowFast. SlowFast's public `frozen_bn_stats` helper only calls
 `eval()` on `nn.BatchNorm3d`. R3M uses `nn.BatchNorm2d`, so that helper does
 not freeze R3M running statistics. This is consistent with the checkpoint.
 
-The private trainer is unavailable, so the exact stream mixture used to update
-BN cannot be proven. The default implementation uses:
+Every one of the 53 `num_batches_tracked` buffers has the same exact change:
+
+```text
+AdaptedR3M - UnadaptedR3M = 16,980
+```
+
+SlowFast names `checkpoint_epoch_00030.pyth` after 30 completed epochs. The
+released alignment checkpoint has 283 batches per epoch and 10 completed
+epochs. The observed counter change decomposes exactly as:
+
+```text
+predecessor robot-only stage:
+  30 epochs * 283 batches * 1 backbone call = 8,490
+
+released pair-alignment stage:
+  10 epochs * 283 batches * 3 visual streams = 8,490
+
+total:
+  8,490 + 8,490 = 16,980
+```
+
+This is stronger than merely observing changed BN means and variances. It
+supports one shared R3M called separately for the human, frozen-robot, and
+adapted-robot streams during pair alignment. The default is therefore:
 
 ```yaml
 model:
-  adapted_bn_mode: robot_stats
+  adapted_bn_mode: shared_stream_stats
 ```
 
-It preserves original BN statistics in the frozen human/robot reference
-encoder and updates BN running buffers only in the adapted robot encoder. This
-best matches the conceptual anchor in the paper and the changed released
-buffers. Set `adapted_bn_mode: frozen` for the literal fully frozen-backbone
-interpretation.
+The interpretation still depends on the unavailable predecessor checkpoint
+and private model source, so the code exposes two diagnostic alternatives:
+
+```text
+robot_stats: one BN update per step, from adapted robot only
+frozen:      no BN running-stat updates
+```
+
+In every mode all learned backbone parameters, including BN affine weight and
+bias, remain frozen.
 
 ## 8. Released Checkpoint Lineage
 
@@ -368,10 +397,12 @@ Consequences:
 
 1. The public model is not transparently derivable from
    `UnadaptedR3M.pt -> 2830 released optimizer steps`.
-2. The missing predecessor may contain the BN statistics and language
-   projection state used to initialize the released adapter run.
-3. Reconstructing that predecessor's objective or exact data order from a path
-   string would be speculation.
+2. Its path and the BN counters strongly support a 30-epoch robot-only BN
+   adaptation stage, but its objective and exact forward path remain private.
+3. The predecessor may also contain language-projection state, although the
+   current checkpoint's optimizer state alone cannot establish that.
+4. Reconstructing the predecessor loss or exact data order from a path string
+   would be speculation.
 
 The default config therefore follows the paper's direct 8k-step description,
 while reproducing the released architecture. It does not invent a private
@@ -391,16 +422,27 @@ The local `lookup.csv` contains:
 ```
 
 The paper reports about 56k pairs but does not publish their identities. The
-config deterministically selects 56,000 rows using:
+released optimizer contains `step=2830` at the end of epoch 9. Its stored LR
+is exactly the SlowFast warmup LR for 283 steps per epoch. At global batch
+200, the private dataset therefore contained between 56,600 and 56,799 rows
+before `drop_last`.
+
+That range is forensic evidence about the authors' private run, not a reliable
+rule for selecting rows from our separately collected index. The training
+configs therefore use every local pair:
 
 ```yaml
 data:
-  max_pairs: 56000
+  max_pairs: null
   subset_seed: 0
 ```
 
-This preserves reproducibility within this repository but cannot reproduce the
-authors' private split.
+This gives 64,830 selected pairs and 324 complete batches at global batch 200.
+The remaining 30 rows are omitted from each epoch by `drop_last`; epoch-wise
+reshuffling changes which rows are omitted. Consequently, our epoch-based
+learning-rate trace intentionally follows the full local index and does not
+match the private 283-batch trace. Setting an integer `max_pairs` remains
+available only for deterministic debug subsets.
 
 ### 9.2 Frame sampling
 
@@ -413,15 +455,17 @@ TARGET_FPS = 30
 USE_OFFSET_SAMPLING = True
 ```
 
-RH20T RGB is 10 Hz. To preserve a 12-frame stride at 30 Hz, the native RH20T
-stride is:
+RH20T RGB is 10 Hz. SlowFast's full-video decoder computes the native clip
+size as:
 
 ```text
-12 * 10 / 30 = 4 frames
+12 * 5 / 30 * 10 = 20 frames
 ```
 
-The implementation randomly selects a valid clip start and samples five frames
-with this stride.
+It selects a random clip start and applies
+`torch.linspace(start, start + 19, 5).long()`, producing relative indices
+`[0, 4, 9, 14, 19]` when the start is zero. The implementation transcribes
+this behavior for the local JPEG sequences.
 
 This is stronger evidence than replacing the released sampling fields with
 five uniformly spaced frames. However, exact decoding and offset behavior in
@@ -432,15 +476,31 @@ the private loader remains unknown.
 The released configuration provides:
 
 ```text
-short-side jitter: 256 to 320
 crop: 224 x 224
 random horizontal flip: true
 ImageNet normalization
 AUG.ENABLE: false
+TRAIN_JITTER_SCALES: [256, 320]
+TRAIN_JITTER_SCALES_RELATIVE: [0.08, 1.0]
+TRAIN_JITTER_ASPECT_RELATIVE: [0.75, 1.3333]
+```
+
+In SlowFast's standard training loader, non-empty relative scale and aspect
+fields select Inception-style random resized crop, taking precedence over the
+absolute short-side jitter values. The default reproduces that path:
+
+```yaml
+sampling:
+  spatial_mode: random_resized_crop
+  relative_crop_scale: [0.08, 1.0]
+  relative_crop_aspect: [0.75, 1.3333]
 ```
 
 `AUG.ENABLE=false` disables the additional augmentation subsystem. It does
-not negate the base scale jitter, crop, and flip fields in the data config.
+not disable base random crop and horizontal flip. One crop and flip are shared
+by every frame in a clip; human and robot clips receive independent draws.
+`short_side_jitter` remains available as a diagnostic alternative because the
+private `Rh20t_pair` loader is unavailable.
 
 One spatial transform is shared by all frames in a clip. Human and robot clips
 receive independently sampled transforms.
@@ -458,8 +518,23 @@ sampling:
   frame_index_mode: compact
 ```
 
-The complete 56k subset boundary audit finds zero missing first/last frames in
-this mode.
+The complete 64,830-pair boundary audit finds zero missing first/last frames
+in this mode. Neither the loader nor the index audit reads timestamp groups.
+
+### 9.5 Reproducible resume
+
+Each sampled index carries its epoch. Temporal sampling and spatial transforms
+use an independent deterministic random stream for:
+
+```text
+(training seed, epoch, pair index, human-or-robot stream)
+```
+
+The checkpoint step determines both the next epoch and its within-epoch batch
+offset. Resuming therefore skips already completed sampler indices without
+decoding them and preserves the remaining samples and augmentations. This
+changes neither the sampling distribution nor the contrastive objective; it
+removes accidental epoch-prefix repetition after preemption.
 
 ## 10. Language Encoder
 
@@ -522,13 +597,23 @@ cosine end LR: 1e-6
 configured schedule: 300 epochs
 ```
 
-With exactly 56,000 pairs and global batch 200:
+The released checkpoint provides a stronger schedule check than the rounded
+paper count:
 
 ```text
-steps per epoch = 280
-10 warmup epochs = 2800 steps
-300 epochs = 84,000 schedule steps
+optimizer step = 2830
+saved epoch = 9
+steps per epoch = 283
+10 warmup epochs = 2830 steps
+300 schedule epochs = 84,900 steps
+stored LR = 9.996501766784452e-5
 ```
+
+SlowFast sets LR before each update from
+`epoch_exact = cur_epoch + cur_iter / steps_per_epoch`. The 2,830th update
+therefore uses `epoch_exact = 9 + 282/283`, which reproduces the stored LR
+exactly. The scheduler follows that epoch-based rule instead of approximating
+it with fixed step counts.
 
 The paper stops adaptation at about 8,000 steps, long before the configured
 300-epoch cosine endpoint. The implementation preserves this distinction:
@@ -536,8 +621,8 @@ The paper stops adaptation at about 8,000 steps, long before the configured
 ```yaml
 train:
   max_steps: 8000
-  warmup_steps: 2800
-  schedule_total_steps: 84000
+  warmup_epochs: 10.0
+  schedule_epochs: 300.0
 ```
 
 ## 13. DDP Semantics
@@ -554,6 +639,8 @@ Eq. (6) is then evaluated over the full global batch. This makes a 4 x 50 run
 equivalent in candidate structure to batch 200.
 
 The code does not use four independent local losses with only 49 negatives.
+The repository also includes a two-process numerical audit that compares the
+DDP parameter gradient against one single-process global batch.
 
 BN is not synchronized because the released config says:
 
@@ -654,13 +741,13 @@ baseline.
 The implementation has passed:
 
 ```text
-9 unit tests
+20 unit tests
 real RH20T image forward/backward
 real R3M DistilBERT forward
 full one-step trainer and final export
 resume from compact training checkpoint
-two-process DDP global-negative smoke test
-56k pair boundary-file audit
+two-process DDP global-negative smoke test and gradient-equivalence audit
+64,830-pair boundary-file audit
 released checkpoint forensic audit
 438/438 export layout comparison
 ```

@@ -167,15 +167,20 @@ class HRAlignR3ML(nn.Module):
     def __init__(
         self,
         pretrain_path: str | Path,
-        adapted_bn_mode: str = "robot_stats",
+        adapted_bn_mode: str = "shared_stream_stats",
         normalize_language_query: bool = False,
         normalize_visual_tokens_for_attention: bool = False,
         normalize_pooled_features: bool = True,
     ):
         super().__init__()
-        if adapted_bn_mode not in {"robot_stats", "frozen"}:
+        if adapted_bn_mode not in {
+            "shared_stream_stats",
+            "robot_stats",
+            "frozen",
+        }:
             raise ValueError(
-                "adapted_bn_mode must be 'robot_stats' or 'frozen'."
+                "adapted_bn_mode must be shared_stream_stats, robot_stats, "
+                "or frozen."
             )
         self.adapted_bn_mode = adapted_bn_mode
         self.normalize_language_query = normalize_language_query
@@ -192,12 +197,10 @@ class HRAlignR3ML(nn.Module):
                 f"No module.convnet.* R3M weights found in {pretrain_path}."
             )
 
-        self.reference = R3MSpatialBackbone(with_late_adapters=False)
         self.adapted = R3MSpatialBackbone(with_late_adapters=True)
-        _load_visual_state(self.reference, visual_state)
         _load_visual_state(self.adapted, visual_state)
 
-        self.lang_linear = nn.Linear(768, self.reference.output_dim)
+        self.lang_linear = nn.Linear(768, self.adapted.output_dim)
         self._source_language_state = _language_state_from_source(source_state)
         if len(self._source_language_state) != 100:
             raise RuntimeError(
@@ -205,8 +208,6 @@ class HRAlignR3ML(nn.Module):
                 f"found {len(self._source_language_state)}."
             )
 
-        for parameter in self.reference.parameters():
-            parameter.requires_grad = False
         for parameter in self.adapted.parameters():
             parameter.requires_grad = False
         for name, parameter in self.adapted.named_parameters():
@@ -222,20 +223,45 @@ class HRAlignR3ML(nn.Module):
             for key, value in self._source_language_state.items()
         }
 
-    def _set_bn_modes(self, mode: bool) -> None:
-        for module in self.reference.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.eval()
-        adapted_train = mode and self.adapted_bn_mode == "robot_stats"
+    def _set_bn_training(self, enabled: bool) -> None:
         for module in self.adapted.modules():
             if isinstance(module, nn.BatchNorm2d):
-                module.train(adapted_train)
+                module.train(enabled)
 
     def train(self, mode: bool = True):
         super().train(mode)
-        self.reference.eval()
-        self._set_bn_modes(mode)
+        self._set_bn_training(
+            mode and self.adapted_bn_mode == "shared_stream_stats"
+        )
         return self
+
+    def _forward_visual_streams(
+        self,
+        flat_human: torch.Tensor,
+        flat_robot: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run the three paper streams through one shared R3M backbone.
+
+        The released checkpoint's BatchNorm counters are consistent with one
+        human and two robot base-backbone calls per pair batch. Keeping the
+        calls separate also preserves the private run's inferred stream-wise
+        BN updates instead of collapsing them into one concatenated call.
+        """
+        if self.adapted_bn_mode == "robot_stats":
+            self._set_bn_training(False)
+            human_reference = self.adapted.forward_base(flat_human)
+            robot_reference = self.adapted.forward_base(flat_robot)
+            self._set_bn_training(self.training)
+            robot_adapted_base = self.adapted.forward_base(flat_robot)
+        else:
+            self._set_bn_training(
+                self.training
+                and self.adapted_bn_mode == "shared_stream_stats"
+            )
+            human_reference = self.adapted.forward_base(flat_human)
+            robot_reference = self.adapted.forward_base(flat_robot)
+            robot_adapted_base = self.adapted.forward_base(flat_robot)
+        return human_reference, robot_reference, robot_adapted_base
 
     def _task_aware_pool(
         self,
@@ -278,11 +304,11 @@ class HRAlignR3ML(nn.Module):
         flat_robot = robot_images.flatten(0, 1)
 
         with torch.no_grad():
-            reference = self.reference.forward_base(
-                torch.cat([flat_human, flat_robot], dim=0)
-            )
-            human_reference, robot_reference = reference.chunk(2, dim=0)
-            robot_adapted_base = self.adapted.forward_base(flat_robot)
+            (
+                human_reference,
+                robot_reference,
+                robot_adapted_base,
+            ) = self._forward_visual_streams(flat_human, flat_robot)
         robot_adapted = self.adapted.apply_adapters(robot_adapted_base)
 
         def restore_time(features: torch.Tensor) -> torch.Tensor:
@@ -350,17 +376,17 @@ class HRAlignR3ML(nn.Module):
     def load_trainable_state(
         self, state: Mapping[str, torch.Tensor]
     ) -> tuple[list[str], list[str]]:
-        missing, unexpected = self.load_state_dict(state, strict=False)
-        relevant_missing = [
-            key
-            for key in missing
-            if key.startswith("adapted.convnet.late_adapter_")
-            or key.startswith("lang_linear.")
-        ]
-        if relevant_missing:
+        expected = set(self.trainable_state())
+        supplied = set(state)
+        missing_state = sorted(expected - supplied)
+        unexpected_state = sorted(supplied - expected)
+        if missing_state or unexpected_state:
             raise RuntimeError(
-                f"Resume checkpoint misses trainable tensors: {relevant_missing}"
+                "Resume checkpoint trainable state is incompatible: "
+                f"missing={missing_state[:20]}, "
+                f"unexpected={unexpected_state[:20]}."
             )
+        missing, unexpected = self.load_state_dict(state, strict=False)
         return list(missing), list(unexpected)
 
     def trainable_parameter_count(self) -> dict[str, int]:

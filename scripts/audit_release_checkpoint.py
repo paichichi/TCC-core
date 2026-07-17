@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import math
 from pathlib import Path
 import sys
 
@@ -75,6 +76,52 @@ def main() -> None:
         group.get("lr") for group in optimizer.get("param_groups", [])
     ]
     print(f"optimizer_learning_rates: {learning_rates}")
+    released_epoch = adapted_checkpoint.get("epoch")
+    steps_per_epoch = None
+    if (
+        isinstance(released_epoch, int)
+        and len(steps) == 1
+        and steps[0] % (released_epoch + 1) == 0
+    ):
+        steps_per_epoch = steps[0] // (released_epoch + 1)
+        completed_steps = steps[0] - 1
+        epoch_exact = completed_steps / steps_per_epoch
+        warmup_lr = 1e-6 + epoch_exact / 10.0 * (1e-4 - 1e-6)
+        print(f"inferred_steps_per_epoch: {steps_per_epoch}")
+        print(f"inferred_epoch_exact: {epoch_exact:.15f}")
+        print(f"slowfast_expected_lr: {warmup_lr:.15g}")
+        if learning_rates and not math.isclose(
+            learning_rates[0], warmup_lr, rel_tol=0.0, abs_tol=1e-15
+        ):
+            raise RuntimeError(
+                "Released optimizer LR does not match the inferred "
+                "SlowFast warmup schedule."
+            )
+    batch_counter_deltas = [
+        int(value) - int(unadapted[key])
+        for key, value in adapted.items()
+        if key.endswith("num_batches_tracked") and key in unadapted
+    ]
+    counter_delta_counts = Counter(batch_counter_deltas)
+    print(f"bn_counter_modules: {len(batch_counter_deltas)}")
+    print(f"bn_counter_delta_counts: {dict(counter_delta_counts)}")
+    if (
+        len(counter_delta_counts) == 1
+        and len(steps) == 1
+        and steps_per_epoch is not None
+    ):
+        total_delta = next(iter(counter_delta_counts))
+        alignment_three_stream_delta = steps[0] * 3
+        predecessor_delta = total_delta - alignment_three_stream_delta
+        print(
+            "bn_counter_three_stream_alignment_delta: "
+            f"{alignment_three_stream_delta}"
+        )
+        print(f"bn_counter_inferred_predecessor_delta: {predecessor_delta}")
+        print(
+            "bn_counter_inferred_predecessor_epochs: "
+            f"{predecessor_delta / steps_per_epoch:.6g}"
+        )
     zero_first_moment = [
         parameter_id
         for parameter_id, state in states.items()

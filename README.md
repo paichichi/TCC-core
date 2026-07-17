@@ -26,12 +26,15 @@ evidence audit and all unresolved gaps are documented in
 
 ## Implemented Pipeline
 
-One dataset item is one same-camera human/robot video pair:
+One dataset item is one same-camera human/robot video pair. All three visual
+streams use one shared R3M instance; learned backbone parameters are frozen,
+while the default checkpoint-informed mode keeps its BatchNorm2d running
+statistics active:
 
 ```text
-human clip H_i ---- frozen R3M F -------------------- h_i^f
-robot clip R_i ---- frozen R3M F -------------------- r_i^f
-robot clip R_i ---- frozen R3M + 3 late adapters --- r_i^t
+human clip H_i ---- shared frozen-parameter R3M F ---------------- h_i^f
+robot clip R_i ---- shared frozen-parameter R3M F ---------------- r_i^f
+robot clip R_i ---- shared frozen-parameter R3M + 3 adapters ----- r_i^t
 task text L_i ----- frozen DistilBERT + trainable FC --- query l_i
 
 spatial-temporal features + l_i
@@ -61,6 +64,25 @@ conda activate hralign
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
 ```
+
+For the local RTX 5090 (`sm_120`), use the isolated environment created for
+this repository:
+
+```bash
+conda create -n tcc-core-sm120 python=3.10 pip -y
+conda activate tcc-core-sm120
+python -m pip install torch==2.11.0 torchvision==0.26.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+python -m pip install 'transformers>=4.40,<5' pyyaml pytest
+python -m pip install -e . --no-deps
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_arch_list())"
+```
+
+The validated local stack is Python 3.10, PyTorch `2.11.0+cu128`, and
+torchvision `0.26.0+cu128`. Its architecture list includes `sm_120`; both a
+CUDA convolution backward pass and the real-image HR-Align smoke test pass on
+the RTX 5090. Keep the older `tcc-core` environment for historical runs rather
+than upgrading it in place.
 
 The R3M checkpoint contains the DistilBERT weights, but not the tokenizer
 vocabulary. The first run must be able to obtain
@@ -96,9 +118,13 @@ sampling:
 Use `manifest_offset` only if JPEG filenames preserve the original RH20T frame
 indices.
 
+Training reads `lookup.csv` and `manifest.csv` directly. It does not read
+`tcn_timestamp_groups.csv`, and the default `data.max_pairs: null` uses all
+64,830 human-robot pairs in the local frame-ID index.
+
 ## Audit Before Training
 
-Check the deterministic 56k subset and every selected sequence boundary:
+Check the complete local frame-ID index and every selected sequence boundary:
 
 ```bash
 python scripts/audit_dataset.py \
@@ -106,10 +132,12 @@ python scripts/audit_dataset.py \
   --lookup /home/paichichi/data/RH20T/TCC_RH20T/lookup.csv \
   --manifest /home/paichichi/data/RH20T/TCC_RH20T/manifest.csv \
   --task-descriptions metadata/rh20t_task_descriptions.json \
-  --max-pairs 56000 \
   --frame-index-mode compact \
   --check-files
 ```
+
+With the current local index, the audit should report `selected_pairs: 64830`,
+`complete_global_batches: 324`, and zero missing boundary frames.
 
 Audit the released model against original R3M:
 
@@ -173,6 +201,14 @@ The paper uses 4 GPUs, 50 pairs per GPU, and global batch 200. Global batch is
 part of the method because all other pairs become negatives. Gradient
 accumulation does not recreate those missing negatives.
 
+Verify that differentiable global gather plus DDP has the same gradient as a
+single-process global batch:
+
+```bash
+torchrun --standalone --nproc-per-node=2 \
+  scripts/audit_ddp_equivalence.py
+```
+
 CLI overrides use dotted YAML paths:
 
 ```bash
@@ -189,6 +225,11 @@ python train.py \
   --config configs/hralign_r3m_l.yaml \
   --resume runs/hralign_r3m_l/checkpoint_001000.pt
 ```
+
+The sampler encodes the epoch in every dataset index and restores the exact
+within-epoch batch offset. Frame sampling and spatial transforms are seeded by
+`(train seed, epoch, pair index, stream)`, so a resumed run does not repeat the
+start of an epoch or silently change its remaining augmentations.
 
 ## NeSI
 
@@ -230,6 +271,9 @@ The tests cover:
 - exact vectorization of paper Eq. (6);
 - released adapter parameter count and initialization behavior;
 - compact and manifest-offset frame layouts;
+- resumable epoch-addressed sampling and deterministic stream augmentation;
+- released SlowFast learning rate at optimizer step 2,830;
+- checkpoint-inferred three-stream BatchNorm update behavior;
 - all 438 released checkpoint keys and tensor shapes.
 
 ## Primary Sources

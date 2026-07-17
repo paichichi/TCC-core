@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from itertools import islice
 import math
 import random
 import time
@@ -55,6 +56,30 @@ CSV_FIELDS = [
 ]
 
 
+class EpochDistributedSampler(DistributedSampler):
+    """Distributed sampler with resumable offsets and epoch-aware indices."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_index = 0
+
+    def set_epoch(self, epoch: int, start_index: int = 0) -> None:
+        super().set_epoch(epoch)
+        if not 0 <= start_index <= super().__len__():
+            raise ValueError(
+                f"Sampler start_index={start_index} is outside "
+                f"[0, {super().__len__()}]."
+            )
+        self.start_index = int(start_index)
+
+    def __iter__(self):
+        indices = islice(super().__iter__(), self.start_index, None)
+        return iter((index, self.epoch) for index in indices)
+
+    def __len__(self) -> int:
+        return super().__len__() - self.start_index
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train the release-compatible HR-Align R3M-Align-L model."
@@ -100,33 +125,138 @@ def build_optimizer(
         else:
             decay.append(parameter)
     groups = [
-        {"params": decay, "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
+        {
+            "params": decay,
+            "weight_decay": weight_decay,
+            "layer_decay": 1.0,
+            "apply_LARS": False,
+        },
+        {
+            "params": no_decay,
+            "weight_decay": 0.0,
+            "layer_decay": 1.0,
+            "apply_LARS": False,
+        },
     ]
     return torch.optim.Adam(groups, lr=learning_rate, betas=(0.9, 0.999))
+
+
+class SlowFastEpochLRScheduler:
+    """Step-addressable transcription of SlowFast's epoch-based cosine LR."""
+
+    format_version = 1
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        base_lr: float,
+        warmup_start_lr: float,
+        warmup_epochs: float,
+        schedule_epochs: float,
+        steps_per_epoch: int,
+        end_lr: float,
+    ):
+        if base_lr <= 0 or warmup_start_lr < 0 or end_lr < 0:
+            raise ValueError(
+                "Learning rates must be non-negative and base_lr positive."
+            )
+        if warmup_epochs < 0:
+            raise ValueError("warmup_epochs cannot be negative.")
+        if schedule_epochs <= warmup_epochs:
+            raise ValueError("schedule_epochs must be greater than warmup_epochs.")
+        if steps_per_epoch < 1:
+            raise ValueError("steps_per_epoch must be positive.")
+        if end_lr >= base_lr:
+            raise ValueError("end_lr must be smaller than base_lr.")
+
+        self.optimizer = optimizer
+        self.base_lr = float(base_lr)
+        self.warmup_start_lr = float(warmup_start_lr)
+        self.warmup_epochs = float(warmup_epochs)
+        self.schedule_epochs = float(schedule_epochs)
+        self.steps_per_epoch = int(steps_per_epoch)
+        self.end_lr = float(end_lr)
+        self.last_completed_step = 0
+        self.set_step(0)
+
+    def lr_at_step(self, completed_steps: int) -> float:
+        if completed_steps < 0:
+            raise ValueError("completed_steps cannot be negative.")
+        epoch_exact = completed_steps / self.steps_per_epoch
+        if self.warmup_epochs > 0 and epoch_exact < self.warmup_epochs:
+            progress = epoch_exact / self.warmup_epochs
+            return self.warmup_start_lr + progress * (
+                self.base_lr - self.warmup_start_lr
+            )
+
+        progress = (
+            epoch_exact - self.warmup_epochs
+        ) / (self.schedule_epochs - self.warmup_epochs)
+        progress = min(1.0, max(0.0, progress))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return self.end_lr + (self.base_lr - self.end_lr) * cosine
+
+    def set_step(self, completed_steps: int) -> float:
+        learning_rate = self.lr_at_step(completed_steps)
+        for group in self.optimizer.param_groups:
+            group["lr"] = learning_rate * float(group.get("layer_decay", 1.0))
+        self.last_completed_step = int(completed_steps)
+        return learning_rate
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "format_version": self.format_version,
+            "last_completed_step": self.last_completed_step,
+            "base_lr": self.base_lr,
+            "warmup_start_lr": self.warmup_start_lr,
+            "warmup_epochs": self.warmup_epochs,
+            "schedule_epochs": self.schedule_epochs,
+            "steps_per_epoch": self.steps_per_epoch,
+            "end_lr": self.end_lr,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if int(state.get("format_version", -1)) != self.format_version:
+            raise ValueError("Unsupported HR-Align scheduler checkpoint format.")
+        expected = {
+            "base_lr": self.base_lr,
+            "warmup_start_lr": self.warmup_start_lr,
+            "warmup_epochs": self.warmup_epochs,
+            "schedule_epochs": self.schedule_epochs,
+            "steps_per_epoch": self.steps_per_epoch,
+            "end_lr": self.end_lr,
+        }
+        mismatches = {
+            key: (state.get(key), value)
+            for key, value in expected.items()
+            if state.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(
+                "Scheduler configuration changed across resume: "
+                f"{mismatches}"
+            )
+        self.set_step(int(state["last_completed_step"]))
 
 
 def build_scheduler(
     optimizer: torch.optim.Optimizer,
     base_lr: float,
     warmup_start_lr: float,
-    warmup_steps: int,
-    schedule_total_steps: int,
+    warmup_epochs: float,
+    schedule_epochs: float,
+    steps_per_epoch: int,
     end_lr: float,
-) -> torch.optim.lr_scheduler.LambdaLR:
-    start_ratio = warmup_start_lr / base_lr
-    end_ratio = end_lr / base_lr
-
-    def multiplier(step: int) -> float:
-        if warmup_steps > 0 and step < warmup_steps:
-            progress = step / warmup_steps
-            return start_ratio + progress * (1.0 - start_ratio)
-        denominator = max(1, schedule_total_steps - warmup_steps)
-        progress = min(1.0, max(0.0, (step - warmup_steps) / denominator))
-        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return end_ratio + (1.0 - end_ratio) * cosine
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
+) -> SlowFastEpochLRScheduler:
+    return SlowFastEpochLRScheduler(
+        optimizer=optimizer,
+        base_lr=base_lr,
+        warmup_start_lr=warmup_start_lr,
+        warmup_epochs=warmup_epochs,
+        schedule_epochs=schedule_epochs,
+        steps_per_epoch=steps_per_epoch,
+        end_lr=end_lr,
+    )
 
 
 def build_text_encoder(
@@ -214,28 +344,24 @@ def _train(
         manifest_path=data_config["manifest"],
         task_descriptions_path=data_config["task_descriptions"],
         sampling=sampling,
-        max_pairs=data_config.get("max_pairs", 56000),
+        max_pairs=data_config.get("max_pairs"),
         subset_seed=int(data_config.get("subset_seed", 0)),
         allowed_tasks=data_config.get("allowed_tasks"),
         train=True,
+        augmentation_seed=seed,
     )
-    sampler = (
-        DistributedSampler(
-            dataset,
-            num_replicas=context.world_size,
-            rank=context.rank,
-            shuffle=True,
-            seed=seed,
-            drop_last=True,
-        )
-        if context.world_size > 1
-        else None
+    sampler = EpochDistributedSampler(
+        dataset,
+        num_replicas=context.world_size,
+        rank=context.rank,
+        shuffle=True,
+        seed=seed,
+        drop_last=True,
     )
     batch_size = int(train_config.get("batch_size_per_gpu", 50))
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=sampler is None,
         sampler=sampler,
         num_workers=int(train_config.get("num_workers", 4)),
         pin_memory=(
@@ -256,7 +382,9 @@ def _train(
     model_config = config.get("model", {})
     core_model = HRAlignR3ML(
         pretrain_path=model_config["pretrain"],
-        adapted_bn_mode=model_config.get("adapted_bn_mode", "robot_stats"),
+        adapted_bn_mode=model_config.get(
+            "adapted_bn_mode", "shared_stream_stats"
+        ),
         normalize_language_query=bool(
             model_config.get("normalize_language_query", False)
         ),
@@ -284,10 +412,9 @@ def _train(
         optimizer,
         base_lr=learning_rate,
         warmup_start_lr=float(train_config.get("warmup_start_lr", 1e-6)),
-        warmup_steps=int(train_config.get("warmup_steps", 2800)),
-        schedule_total_steps=int(
-            train_config.get("schedule_total_steps", 84000)
-        ),
+        warmup_epochs=float(train_config.get("warmup_epochs", 10.0)),
+        schedule_epochs=float(train_config.get("schedule_epochs", 300.0)),
+        steps_per_epoch=steps_per_epoch,
         end_lr=float(train_config.get("end_lr", 1e-6)),
     )
     amp_enabled = bool(train_config.get("amp", False))
@@ -310,10 +437,10 @@ def _train(
         )
 
     start_step = 0
-    epoch = 0
+    saved_epoch = 0
     resume_path = args.resume or train_config.get("resume")
     if resume_path:
-        start_step, epoch = load_training_checkpoint(
+        start_step, saved_epoch = load_training_checkpoint(
             resume_path,
             model,
             optimizer=optimizer,
@@ -331,7 +458,9 @@ def _train(
         print(
             f"pairs={len(dataset)} tasks={task_count} "
             f"frames={sampling.num_frames} batch_per_gpu={batch_size} "
-            f"world_size={context.world_size} contrastive_batch={actual_global_batch}"
+            f"world_size={context.world_size} "
+            f"contrastive_batch={actual_global_batch} "
+            f"steps_per_epoch={steps_per_epoch}"
         )
         print(
             f"trainable adapters={counts['adapters']} "
@@ -357,8 +486,14 @@ def _train(
     save_every = int(train_config.get("save_every", 1000))
     temperature = float(config.get("loss", {}).get("temperature", 0.1))
     grad_clip = float(train_config.get("grad_clip_norm", 1.0))
-    if sampler is not None:
-        sampler.set_epoch(epoch)
+    epoch = start_step // steps_per_epoch
+    batch_offset = start_step % steps_per_epoch
+    sampler.set_epoch(epoch, start_index=batch_offset * batch_size)
+    if resume_path and context.is_main and saved_epoch != epoch:
+        print(
+            "resume epoch normalized from checkpoint metadata "
+            f"{saved_epoch} to step-derived epoch {epoch}"
+        )
     data_iterator = iter(loader)
     trainable_parameters = [
         parameter
@@ -374,8 +509,7 @@ def _train(
                 batch = next(data_iterator)
             except StopIteration:
                 epoch += 1
-                if sampler is not None:
-                    sampler.set_epoch(epoch)
+                sampler.set_epoch(epoch)
                 data_iterator = iter(loader)
                 batch = next(data_iterator)
 
@@ -389,6 +523,7 @@ def _train(
 
             model.train()
             optimizer.zero_grad(set_to_none=True)
+            current_lr = scheduler.set_step(step - 1)
             with torch.autocast(
                 device_type=context.device.type,
                 dtype=torch.float16,
@@ -417,7 +552,6 @@ def _train(
             )
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
 
             elapsed = time.perf_counter() - step_start
             adapted_std = robot_adapted_global.float().std(
@@ -441,7 +575,7 @@ def _train(
                     "adapted_attention_entropy": _mean_metric(
                         attention_entropy
                     ),
-                    "learning_rate": optimizer.param_groups[0]["lr"],
+                    "learning_rate": current_lr,
                     "grad_norm": float(grad_norm.detach().cpu()),
                     "seconds": elapsed,
                     "images": actual_global_batch * sampling.num_frames * 3,
@@ -470,7 +604,7 @@ def _train(
                         scheduler,
                         scaler,
                         step,
-                        epoch,
+                        step // steps_per_epoch,
                         config,
                     )
                 barrier()
@@ -484,7 +618,7 @@ def _train(
                 scheduler,
                 scaler,
                 max_steps,
-                epoch,
+                max_steps // steps_per_epoch,
                 config,
             )
             export_official_checkpoint(

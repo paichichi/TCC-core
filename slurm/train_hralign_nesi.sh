@@ -17,6 +17,14 @@ ACTIVATE="${ACTIVATE:-/nesi/project/uoa04758/xzha593/envs/activate_tcc_core.sh}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-2}"
 
 cd "${PROJECT_ROOT}"
+if [[ ! -f "${CONFIG}" ]]; then
+  echo "Missing config: ${PROJECT_ROOT}/${CONFIG}" >&2
+  exit 1
+fi
+if [[ ! -f "${ACTIVATE}" ]]; then
+  echo "Missing environment activation script: ${ACTIVATE}" >&2
+  exit 1
+fi
 source "${ACTIVATE}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
@@ -28,14 +36,22 @@ MASTER_ADDR="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
 MASTER_PORT="$((10000 + SLURM_JOB_ID % 50000))"
 
 export PROJECT_ROOT CONFIG GPUS_PER_NODE MASTER_ADDR MASTER_PORT
+export ACTIVATE
 
 echo "nodes=${SLURM_NNODES} gpus_per_node=${GPUS_PER_NODE}"
 echo "rendezvous=${MASTER_ADDR}:${MASTER_PORT}"
 echo "config=${CONFIG}"
 
-srun --kill-on-bad-exit=1 bash -c '
+srun \
+  --nodes="${SLURM_NNODES}" \
+  --ntasks="${SLURM_NNODES}" \
+  --ntasks-per-node=1 \
+  --kill-on-bad-exit=1 \
+  bash -c '
+  set -euo pipefail
+  source "${ACTIVATE}"
   cd "${PROJECT_ROOT}"
-  torchrun \
+  exec torchrun \
     --nnodes="${SLURM_NNODES}" \
     --nproc-per-node="${GPUS_PER_NODE}" \
     --node-rank="${SLURM_NODEID}" \

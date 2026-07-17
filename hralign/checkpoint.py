@@ -30,7 +30,7 @@ def save_training_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    scheduler: Any | None,
     scaler: torch.amp.GradScaler | None,
     step: int,
     epoch: int,
@@ -54,7 +54,7 @@ def load_training_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
-    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scheduler: Any | None = None,
     scaler: torch.amp.GradScaler | None = None,
 ) -> tuple[int, int]:
     checkpoint = load_torch_checkpoint(path)

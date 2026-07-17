@@ -3,7 +3,8 @@ data:
   lookup: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T/lookup.csv
   manifest: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T/manifest.csv
   task_descriptions: metadata/rh20t_task_descriptions.json
-  max_pairs: 56000
+  # Use every pair in our frame-ID index; no timestamp-group file is used.
+  max_pairs: null
   subset_seed: 0
 
 sampling:
@@ -13,6 +14,9 @@ sampling:
   sampling_rate: 12
   source_fps: 10
   target_fps: 30
+  spatial_mode: random_resized_crop
+  relative_crop_scale: [0.08, 1.0]
+  relative_crop_aspect: [0.75, 1.3333]
   train_jitter_scales: [256, 320]
   crop_size: 224
   random_horizontal_flip: true
@@ -20,7 +24,7 @@ sampling:
 model:
   pretrain: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
   # Checkpoint-informed default; see docs/REPRODUCTION_AUDIT.md.
-  adapted_bn_mode: robot_stats
+  adapted_bn_mode: shared_stream_stats
   normalize_language_query: false
   normalize_visual_tokens_for_attention: false
   normalize_pooled_features: true
@@ -51,8 +55,8 @@ train:
   zero_weight_decay_1d: true
   grad_clip_norm: 1.0
   warmup_start_lr: 0.000001
-  warmup_steps: 2800
-  schedule_total_steps: 84000
+  warmup_epochs: 10.0
+  schedule_epochs: 300.0
   amp: false
   log_every: 10
   save_every: 1000

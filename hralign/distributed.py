@@ -29,8 +29,15 @@ def initialize_distributed(
 
     if requested_device:
         requested = torch.device(requested_device)
-        if world_size > 1 and requested.type == "cuda":
+        if requested.type == "cuda" and requested.index is None:
             device = torch.device("cuda", local_rank)
+        elif world_size > 1 and requested.type == "cuda":
+            if requested.index != local_rank:
+                raise ValueError(
+                    "Under torchrun, an explicit CUDA device must match "
+                    f"LOCAL_RANK={local_rank}; got {requested}."
+                )
+            device = requested
         else:
             device = requested
     elif torch.cuda.is_available():

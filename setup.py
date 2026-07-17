@@ -12,7 +12,7 @@ setup(
         "pyyaml>=6.0",
         "torch>=2.1",
         "torchvision>=0.16",
-        "transformers>=4.40",
+        "transformers>=4.40,<5",
     ],
     python_requires=">=3.10",
 )

@@ -4,9 +4,9 @@ data:
   lookup: /home/paichichi/data/RH20T/TCC_RH20T/lookup.csv
   manifest: /home/paichichi/data/RH20T/TCC_RH20T/manifest.csv
   task_descriptions: metadata/rh20t_task_descriptions.json
-  # The exact authors' 56k subset was not released. This is a deterministic
-  # random subset of the available same-camera H/R pairs.
-  max_pairs: 56000
+  # Train on every pair in our frame-ID index. Set an integer only for a
+  # deterministic debug subset. No timestamp-group file is used.
+  max_pairs: null
   subset_seed: 0
 
 sampling:
@@ -20,15 +20,21 @@ sampling:
   sampling_rate: 12
   source_fps: 10
   target_fps: 30
+  # The released SlowFast config activates its Inception-style relative crop
+  # path even though absolute jitter scales are also present.
+  spatial_mode: random_resized_crop
+  relative_crop_scale: [0.08, 1.0]
+  relative_crop_aspect: [0.75, 1.3333]
   train_jitter_scales: [256, 320]
   crop_size: 224
   random_horizontal_flip: true
 
 model:
   pretrain: /home/paichichi/data/pretrain/UnadaptedR3M.pt
-  # All learned backbone parameters remain frozen. The release changes all
-  # ResNet-50 BN buffers; robot_stats is the checkpoint-informed default.
-  adapted_bn_mode: robot_stats
+  # All learned backbone parameters remain frozen. Human, frozen-robot, and
+  # adapted-robot streams share one R3M. The release BN counters support three
+  # separate base-backbone calls per step in this alignment stage.
+  adapted_bn_mode: shared_stream_stats
   # "lang.feat.norm" appears in the released run metadata. The paper does not
   # explicitly specify normalization, so this remains a documented inference.
   normalize_language_query: false
@@ -64,11 +70,12 @@ train:
   weight_decay: 0.0001
   zero_weight_decay_1d: true
   grad_clip_norm: 1.0
-  # Released cfg: 10 warmup epochs and 300 schedule epochs. At 56k/200 this
-  # corresponds to roughly 2.8k and 84k optimizer steps.
+  # SlowFast updates LR from fractional epoch before every optimizer step.
+  # The epoch schedule follows our full local index (64,830 pairs), not the
+  # unreleased private subset inferred from the public checkpoint.
   warmup_start_lr: 0.000001
-  warmup_steps: 2800
-  schedule_total_steps: 84000
+  warmup_epochs: 10.0
+  schedule_epochs: 300.0
   amp: false
   log_every: 10
   save_every: 1000

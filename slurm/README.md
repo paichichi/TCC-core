@@ -59,8 +59,8 @@ torchrun \
   --set train.num_workers=0 \
   --set train.persistent_workers=false \
   --set train.max_steps=1 \
-  --set train.warmup_steps=1 \
-  --set train.schedule_total_steps=1 \
+  --set train.warmup_epochs=0 \
+  --set train.schedule_epochs=1 \
   --set train.log_every=1 \
   --set train.save_every=0
 ```
@@ -101,10 +101,11 @@ The first lines should report:
 
 ```text
 nodes=2 gpus_per_node=2
-pairs=56000
+pairs=64830
 batch_per_gpu=50
 world_size=4
 contrastive_batch=200
+steps_per_epoch=324
 ```
 
 ## 5. Resume

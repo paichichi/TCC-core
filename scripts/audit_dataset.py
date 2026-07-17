@@ -17,7 +17,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lookup", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--task-descriptions", required=True)
-    parser.add_argument("--max-pairs", type=int, default=56000)
+    parser.add_argument(
+        "--max-pairs",
+        type=int,
+        default=None,
+        help="Optional deterministic debug subset; omitted means all pairs.",
+    )
+    parser.add_argument("--global-batch-size", type=int, default=200)
     parser.add_argument(
         "--frame-index-mode",
         choices=("compact", "manifest_offset"),
@@ -44,6 +50,10 @@ def main() -> None:
         max_pairs=args.max_pairs,
     )
     print(f"selected_pairs: {len(records)}")
+    print(
+        "complete_global_batches: "
+        f"{len(records) // args.global_batch_size}"
+    )
     print(f"tasks: {len(set(record.task_id for record in records))}")
     print(f"cameras: {len(set(record.camera_id for record in records))}")
     print("top_tasks:")

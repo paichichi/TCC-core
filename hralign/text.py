@@ -86,7 +86,6 @@ class FrozenR3MTextEncoder(nn.Module):
             list(texts),
             return_tensors="pt",
             padding=True,
-            truncation=True,
         )
         encoded = {key: value.to(device) for key, value in encoded.items()}
         hidden = self.model(**encoded).last_hidden_state

@@ -101,9 +101,34 @@ def validate_config(config: dict[str, Any]) -> None:
     frame_index_mode = str(
         config.get("sampling", {}).get("frame_index_mode", "compact")
     )
+    sampling_config = config.get("sampling", {})
+    sampling_mode = str(sampling_config.get("mode", "slowfast_clip"))
+    spatial_mode = str(
+        sampling_config.get("spatial_mode", "random_resized_crop")
+    )
+    relative_crop_scale = sampling_config.get(
+        "relative_crop_scale", [0.08, 1.0]
+    )
+    relative_crop_aspect = sampling_config.get(
+        "relative_crop_aspect", [0.75, 1.3333]
+    )
+    adapted_bn_mode = str(
+        config.get("model", {}).get(
+            "adapted_bn_mode", "shared_stream_stats"
+        )
+    )
     batch_size = int(config.get("train", {}).get("batch_size_per_gpu", 1))
+    max_pairs = config.get("data", {}).get("max_pairs")
     temperature = float(config.get("loss", {}).get("temperature", 0.1))
     max_steps = int(config.get("train", {}).get("max_steps", 8000))
+    train_config = config.get("train", {})
+    warmup_epochs = float(train_config.get("warmup_epochs", 10.0))
+    schedule_epochs = float(train_config.get("schedule_epochs", 300.0))
+    deprecated_schedule_keys = [
+        key
+        for key in ("warmup_steps", "schedule_total_steps")
+        if key in train_config
+    ]
     if num_frames < 1:
         raise ValueError("sampling.num_frames must be positive.")
     if crop_size < 1:
@@ -112,12 +137,64 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError(
             "sampling.frame_index_mode must be compact or manifest_offset."
         )
+    if sampling_mode not in {"slowfast_clip", "random_sorted"}:
+        raise ValueError(
+            "sampling.mode must be slowfast_clip or random_sorted."
+        )
+    if spatial_mode not in {
+        "random_resized_crop",
+        "short_side_jitter",
+    }:
+        raise ValueError(
+            "sampling.spatial_mode must be random_resized_crop or "
+            "short_side_jitter."
+        )
+    for name, values, require_positive in (
+        ("relative_crop_scale", relative_crop_scale, True),
+        ("relative_crop_aspect", relative_crop_aspect, True),
+    ):
+        if (
+            not isinstance(values, (list, tuple))
+            or len(values) != 2
+            or (require_positive and float(values[0]) <= 0)
+            or float(values[0]) > float(values[1])
+        ):
+            raise ValueError(
+                f"sampling.{name} must be an increasing positive pair."
+            )
+    if adapted_bn_mode not in {
+        "shared_stream_stats",
+        "robot_stats",
+        "frozen",
+    }:
+        raise ValueError(
+            "model.adapted_bn_mode must be shared_stream_stats, "
+            "robot_stats, or frozen."
+        )
     if batch_size < 1:
         raise ValueError("train.batch_size_per_gpu must be positive.")
+    if max_pairs is not None and (
+        isinstance(max_pairs, bool)
+        or not isinstance(max_pairs, int)
+        or max_pairs < 1
+    ):
+        raise ValueError("data.max_pairs must be null or a positive integer.")
     if temperature <= 0:
         raise ValueError("loss.temperature must be positive.")
     if max_steps < 1:
         raise ValueError("train.max_steps must be positive.")
+    if deprecated_schedule_keys:
+        raise ValueError(
+            "Use epoch-based train.warmup_epochs and train.schedule_epochs; "
+            "remove deprecated keys: "
+            + ", ".join(deprecated_schedule_keys)
+        )
+    if warmup_epochs < 0:
+        raise ValueError("train.warmup_epochs cannot be negative.")
+    if schedule_epochs <= warmup_epochs:
+        raise ValueError(
+            "train.schedule_epochs must be greater than train.warmup_epochs."
+        )
 
 
 def dump_config(config: dict[str, Any], path: str | Path) -> None:
