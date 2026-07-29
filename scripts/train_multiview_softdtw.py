@@ -39,6 +39,7 @@ PATH_ARG_NAMES = {
     "out_dir",
     "output_root",
     "pretrain_path",
+    "resume",
 }
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs/default.yaml"
 
@@ -90,7 +91,7 @@ def encode_backbone_feature_bundle(
     features = torch.flatten(backbone(images), 1)
     zero = features.new_zeros(())
     return DomainAwareEncoding(features, None, zero, zero, zero)
-  if adapter_domain != "robot_only":
+  if adapter_domain not in ("robot_only", "all_shared_control"):
     raise ValueError(f"Unknown adapter domain: {adapter_domain}")
   if human_group_count is None:
     raise ValueError("robot_only adapter mode requires human_group_count.")
@@ -118,14 +119,16 @@ def encode_backbone_feature_bundle(
   robot_adapted_map = backbone.apply_adapters(robot_frozen_map)
 
   adapted = base.new_empty((images.shape[0], backbone.output_dim))
-  adapted[human_mask] = backbone.pool_features(base[human_mask])
+  if adapter_domain == "all_shared_control":
+    human_adapted_map = backbone.apply_adapters(base[human_mask])
+    adapted[human_mask] = backbone.pool_features(human_adapted_map)
+  else:
+    adapted[human_mask] = backbone.pool_features(base[human_mask])
   adapted[robot_mask] = backbone.pool_features(robot_adapted_map)
 
   frozen_control = None
   if include_frozen_control:
-    frozen_control = base.new_empty((images.shape[0], backbone.output_dim))
-    frozen_control[human_mask] = backbone.pool_features(base[human_mask])
-    frozen_control[robot_mask] = backbone.pool_features(robot_frozen_map)
+    frozen_control = backbone.pool_features(base)
 
   # RVT consumes the CxHxW map rather than only its global average. Preserve
   # every spatial location with a scale-aware trust region. Unlike cosine-only
@@ -319,7 +322,7 @@ class ViewSetAttentionSoftDTW(nn.Module):
       representation_mode: str = "legacy_projected",
   ):
     super().__init__()
-    if adapter_domain not in ("all", "robot_only"):
+    if adapter_domain not in ("all", "robot_only", "all_shared_control"):
       raise ValueError(f"Unknown adapter domain: {adapter_domain}")
     if view_mode not in ("single", "multi"):
       raise ValueError(f"Unknown view mode: {view_mode}")
@@ -368,9 +371,13 @@ class ViewSetAttentionSoftDTW(nn.Module):
           token_size, embedding_size, bias=False)
     if view_mode == "multi":
       self.query = nn.Parameter(torch.randn(token_size) * 0.02)
+      self.register_buffer(
+          "frozen_reference_query", self.query.detach().clone())
     else:
       self.register_buffer(
           "query", torch.zeros(token_size), persistent=False)
+      self.register_buffer(
+          "frozen_reference_query", torch.zeros(token_size))
 
   def _pack_view_tokens(
       self,
@@ -508,9 +515,11 @@ class ViewSetAttentionSoftDTW(nn.Module):
       tokens: torch.Tensor,
       mask: torch.Tensor,
       apply_dropout: bool,
+      query: torch.Tensor | None = None,
   ) -> torch.Tensor:
     scale = tokens.shape[-1] ** -0.5
-    scores = (tokens * self.query).sum(dim=-1) * scale
+    query_vector = self.query if query is None else query
+    scores = (tokens * query_vector).sum(dim=-1) * scale
     scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
     weights = F.softmax(scores, dim=-1)
     weights = weights.masked_fill(~mask, 0.0)
@@ -637,16 +646,22 @@ class ViewSetAttentionSoftDTW(nn.Module):
       clean_weights = self.attention_weights(
           tokens, mask, apply_dropout=False)
       alignment_weights = (
-          clean_weights.detach()
-          if frozen_tokens is not None else clean_weights
+          self.attention_weights(
+              frozen_tokens,
+              mask,
+              apply_dropout=False,
+              query=self.frozen_reference_query,
+          ).detach()
+          if frozen_tokens is not None
+          else clean_weights
       )
       clean = self.attention_pool(
           tokens,
           mask,
           apply_dropout=False,
-          # During counterfactual training, the common aggregation rule is
-          # fixed for both alternatives. The gain hinge therefore cannot be
-          # won merely by changing the attention head instead of the adapter.
+          # During counterfactual training, both alternatives use aggregation
+          # weights derived only from frozen features. Neither the adapter nor
+          # the attention query can move the frozen-reference teacher.
           weights=alignment_weights,
       )
       frozen_clean = (
@@ -793,6 +808,14 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   parser.add_argument("--max-iters", type=int)
   parser.add_argument("--log-every", type=int)
   parser.add_argument("--save-every", type=int)
+  parser.add_argument(
+      "--resume",
+      type=Path,
+      help=(
+          "Resume model and optimizer state from a checkpoint. The output "
+          "losses CSV must end at the checkpoint step."
+      ),
+  )
   parser.add_argument("--gamma", type=float)
   parser.add_argument("--temperature", type=float)
   parser.add_argument(
@@ -811,8 +834,32 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
       ),
   )
   parser.add_argument("--soft-alignment-temperature", type=float)
+  parser.add_argument(
+      "--soft-alignment-feature-mode",
+      choices=("raw", "temporal_centered"),
+      help=(
+          "Normalize raw features, or first subtract each sequence's temporal "
+          "mean so alignment is driven by within-trajectory change."
+      ),
+  )
+  parser.add_argument(
+      "--soft-alignment-normalize-epsilon",
+      type=float,
+      help=(
+          "Minimum sequence-vector norm used by Soft Alignment "
+          "normalization; raise this for temporally centered features."
+      ),
+  )
   parser.add_argument("--soft-alignment-epsilon", type=float)
   parser.add_argument("--soft-alignment-rho", type=float)
+  parser.add_argument(
+      "--soft-alignment-teacher-feature-weight",
+      type=float,
+      help=(
+          "Weight of detached feature distance in the Sinkhorn teacher. "
+          "Zero makes the teacher depend only on the temporal prior."
+      ),
+  )
   parser.add_argument("--soft-alignment-sinkhorn-iters", type=int)
   parser.add_argument("--soft-alignment-struct-lambda", type=float)
   parser.add_argument("--soft-alignment-max-forward-step", type=float)
@@ -891,6 +938,11 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   )
   parser.add_argument("--lr", type=float)
   parser.add_argument("--weight-decay", type=float)
+  parser.add_argument(
+      "--grad-clip-norm",
+      type=float,
+      help="Clip the global gradient norm; zero disables clipping.",
+  )
   parser.add_argument("--seed", type=int)
   parser.add_argument("--image-size", type=int)
   parser.add_argument(
@@ -986,8 +1038,11 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
   )
   parser.add_argument(
       "--adapter-domain",
-      choices=("all", "robot_only"),
-      help="Apply late adapters to every stream or only to Robot images.",
+      choices=("all", "robot_only", "all_shared_control"),
+      help=(
+          "Apply late adapters to every stream, only to Robot images, or to "
+          "both H/R while retaining frozen H/R control branches."
+      ),
   )
   parser.add_argument(
       "--aux-teacher-stop-grad",
@@ -1086,10 +1141,16 @@ def parse_args() -> argparse.Namespace:
     args.tcc_huber_delta = 0.1
   if not hasattr(args, "soft_alignment_temperature"):
     args.soft_alignment_temperature = getattr(args, "temperature", 0.1)
+  if not hasattr(args, "soft_alignment_feature_mode"):
+    args.soft_alignment_feature_mode = "raw"
+  if not hasattr(args, "soft_alignment_normalize_epsilon"):
+    args.soft_alignment_normalize_epsilon = 1e-12
   if not hasattr(args, "soft_alignment_epsilon"):
     args.soft_alignment_epsilon = 0.05
   if not hasattr(args, "soft_alignment_rho"):
     args.soft_alignment_rho = 0.5
+  if not hasattr(args, "soft_alignment_teacher_feature_weight"):
+    args.soft_alignment_teacher_feature_weight = 1.0
   if not hasattr(args, "soft_alignment_sinkhorn_iters"):
     args.soft_alignment_sinkhorn_iters = 20
   if not hasattr(args, "soft_alignment_struct_lambda"):
@@ -1098,6 +1159,8 @@ def parse_args() -> argparse.Namespace:
     args.soft_alignment_max_forward_step = 1.0
   if not hasattr(args, "lambda_sa"):
     args.lambda_sa = 1.0
+  if not hasattr(args, "grad_clip_norm"):
+    args.grad_clip_norm = 0.0
   if not hasattr(args, "lambda_control_gain"):
     args.lambda_control_gain = 0.0
   if not hasattr(args, "control_gain_margin"):
@@ -1149,12 +1212,20 @@ def validate_method_configuration(args: argparse.Namespace) -> None:
   lambda_spatial_preserve = getattr(args, "lambda_spatial_preserve", 0.0)
   spatial_preserve_tolerance = getattr(
       args, "spatial_preserve_tolerance", 0.2)
+  soft_alignment_normalize_epsilon = getattr(
+      args, "soft_alignment_normalize_epsilon", 1e-12)
+  grad_clip_norm = getattr(args, "grad_clip_norm", 0.0)
   if lambda_control_gain < 0 or lambda_spatial_preserve < 0:
     raise ValueError("Auxiliary objective weights must be non-negative.")
   if control_gain_margin < 0:
     raise ValueError("control_gain_margin must be non-negative.")
   if spatial_preserve_tolerance < 0:
     raise ValueError("spatial_preserve_tolerance must be non-negative.")
+  if soft_alignment_normalize_epsilon <= 0:
+    raise ValueError(
+        "soft_alignment_normalize_epsilon must be strictly positive.")
+  if grad_clip_norm < 0:
+    raise ValueError("grad_clip_norm must be non-negative.")
 
   if args.view_mode == "auto":
     args.view_mode = "single" if args.num_multi_view == 1 else "multi"
@@ -1194,9 +1265,12 @@ def validate_method_configuration(args: argparse.Namespace) -> None:
       "hralign_r3m_l",
       "adapted_r3m",
   }
-  if args.adapter_domain == "robot_only" and args.backbone not in adapter_backbones:
+  if (
+      args.adapter_domain in ("robot_only", "all_shared_control")
+      and args.backbone not in adapter_backbones
+  ):
     raise ValueError(
-        "robot_only adapter mode requires an R3M adapter backbone.")
+        "Controlled adapter modes require an R3M adapter backbone.")
   if (
       args.representation_mode == "backbone_pooled"
       and args.fusion_mode != "attention_pool"
@@ -1211,9 +1285,9 @@ def validate_method_configuration(args: argparse.Namespace) -> None:
         "fixed_slot has two arbitrary subsets and cannot define a full-set "
         "stop-gradient teacher.")
   if lambda_control_gain > 0 or lambda_spatial_preserve > 0:
-    if args.adapter_domain != "robot_only":
+    if args.adapter_domain not in ("robot_only", "all_shared_control"):
       raise ValueError(
-          "Control/spatial objectives require adapter_domain=robot_only.")
+          "Control/spatial objectives require a controlled adapter domain.")
     if args.backbone not in adapter_backbones:
       raise ValueError(
           "Control/spatial objectives require an R3M adapter backbone.")
@@ -2117,16 +2191,28 @@ def compute_soft_alignment_direction_details(
     source_seq,
     target_seq,
     temperature,
+    feature_mode,
+    normalize_epsilon,
     epsilon,
     rho,
+    teacher_feature_weight,
     sinkhorn_iters,
     struct_lambda,
     max_forward_step,
     teacher=None,
 ):
   """Score one alignment direction, optionally against a shared teacher."""
-  source = F.normalize(source_seq.float(), dim=-1)
-  target = F.normalize(target_seq.float(), dim=-1)
+  source = source_seq.float()
+  target = target_seq.float()
+  if feature_mode == "temporal_centered":
+    source = source - source.mean(dim=1, keepdim=True)
+    target = target - target.mean(dim=1, keepdim=True)
+  elif feature_mode != "raw":
+    raise ValueError(f"Unknown Soft Alignment feature mode: {feature_mode}")
+  source_norm = torch.linalg.vector_norm(source, dim=-1)
+  target_norm = torch.linalg.vector_norm(target, dim=-1)
+  source = F.normalize(source, dim=-1, eps=normalize_epsilon)
+  target = F.normalize(target, dim=-1, eps=normalize_epsilon)
   similarity = torch.einsum("btd,bsd->bts", source, target)
   pred_log_prob = F.log_softmax(similarity / temperature, dim=2)
   pred_prob = pred_log_prob.exp()
@@ -2135,7 +2221,8 @@ def compute_soft_alignment_direction_details(
   if teacher is None:
     temporal_prior = make_temporal_prior_cost(
         source.shape[1], source.device, source.dtype)
-    teacher_cost = cost + rho * temporal_prior[None]
+    teacher_cost = (
+        teacher_feature_weight * cost + rho * temporal_prior[None])
     with torch.no_grad():
       kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
       teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
@@ -2173,6 +2260,10 @@ def compute_soft_alignment_direction_details(
       "off_dist": off,
       "loss_align": loss_align,
       "loss_struct": loss_struct,
+      "pre_norm_min": torch.minimum(
+          source_norm.min(), target_norm.min()),
+      "pre_norm_mean": 0.5 * (
+          source_norm.mean() + target_norm.mean()),
   }
   return loss, metrics, teacher.detach(), loss_per_pair
 
@@ -2181,8 +2272,11 @@ def compute_soft_alignment_direction(
     source_seq,
     target_seq,
     temperature,
+    feature_mode,
+    normalize_epsilon,
     epsilon,
     rho,
+    teacher_feature_weight,
     sinkhorn_iters,
     struct_lambda,
     max_forward_step,
@@ -2191,8 +2285,11 @@ def compute_soft_alignment_direction(
       source_seq,
       target_seq,
       temperature,
+      feature_mode,
+      normalize_epsilon,
       epsilon,
       rho,
+      teacher_feature_weight,
       sinkhorn_iters,
       struct_lambda,
       max_forward_step,
@@ -2204,8 +2301,11 @@ def compute_soft_alignment_paired(
     h_seq,
     r_seq,
     temperature,
+    feature_mode,
+    normalize_epsilon,
     epsilon,
     rho,
+    teacher_feature_weight,
     sinkhorn_iters,
     struct_lambda,
     max_forward_step,
@@ -2219,8 +2319,11 @@ def compute_soft_alignment_paired(
       h_seq,
       r_seq,
       temperature,
+      feature_mode,
+      normalize_epsilon,
       epsilon,
       rho,
+      teacher_feature_weight,
       sinkhorn_iters,
       struct_lambda,
       max_forward_step,
@@ -2229,8 +2332,11 @@ def compute_soft_alignment_paired(
       r_seq,
       h_seq,
       temperature,
+      feature_mode,
+      normalize_epsilon,
       epsilon,
       rho,
+      teacher_feature_weight,
       sinkhorn_iters,
       struct_lambda,
       max_forward_step,
@@ -2245,83 +2351,184 @@ def compute_soft_alignment_paired(
           metrics_hr["loss_align"] + metrics_rh["loss_align"]),
       "struct_loss": 0.5 * (
           metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
+      "pre_norm_min": torch.minimum(
+          metrics_hr["pre_norm_min"], metrics_rh["pre_norm_min"]),
+      "pre_norm_mean": 0.5 * (
+          metrics_hr["pre_norm_mean"] + metrics_rh["pre_norm_mean"]),
   }
 
 
 def compute_controlled_soft_alignment_paired(
-    h_seq,
+    h_adapted_seq,
     r_adapted_seq,
+    h_frozen_seq,
     r_frozen_seq,
     temperature,
+    feature_mode,
+    normalize_epsilon,
     epsilon,
     rho,
+    teacher_feature_weight,
     sinkhorn_iters,
     struct_lambda,
     max_forward_step,
     margin,
 ):
-  """Compare adapted and frozen Robot features under identical teachers.
+  """Compare adapted and frozen H/R pairs under frozen-reference teachers.
 
-  The adapted H/R pair constructs one detached teacher per direction. Both
-  Robot alternatives are then scored against that exact target distribution.
-  The frozen branch is a counterfactual baseline and receives no gradients.
+  The fully frozen H/R pair constructs one detached teacher per direction.
+  Adapted/adapted and the two mixed pairs are evaluated against those same
+  targets, so changing the adapted features cannot move the control target.
   """
-  if h_seq.ndim != 3:
+  if h_adapted_seq.ndim != 3:
     raise ValueError("Soft alignment sequences must have shape [B, T, D].")
-  if h_seq.shape != r_adapted_seq.shape or h_seq.shape != r_frozen_seq.shape:
+  shapes = {
+      h_adapted_seq.shape,
+      r_adapted_seq.shape,
+      h_frozen_seq.shape,
+      r_frozen_seq.shape,
+  }
+  if len(shapes) != 1:
     raise ValueError(
         "Controlled Soft Alignment sequences must have identical shapes.")
   if margin < 0:
     raise ValueError("Control gain margin must be non-negative.")
 
-  loss_hr, metrics_hr, teacher_hr, adapted_hr = (
-      compute_soft_alignment_direction_details(
-          h_seq,
-          r_adapted_seq,
-          temperature,
-          epsilon,
-          rho,
-          sinkhorn_iters,
-          struct_lambda,
-          max_forward_step,
-      )
-  )
-  loss_rh, metrics_rh, teacher_rh, adapted_rh = (
-      compute_soft_alignment_direction_details(
-          r_adapted_seq,
-          h_seq,
-          temperature,
-          epsilon,
-          rho,
-          sinkhorn_iters,
-          struct_lambda,
-          max_forward_step,
-      )
-  )
   with torch.no_grad():
-    _, _, _, frozen_hr = compute_soft_alignment_direction_details(
-        h_seq.detach(),
-        r_frozen_seq.detach(),
-        temperature,
-        epsilon,
-        rho,
-        sinkhorn_iters,
-        struct_lambda,
-        max_forward_step,
-        teacher=teacher_hr,
+    _, frozen_metrics_hr, teacher_hr, frozen_hr = (
+        compute_soft_alignment_direction_details(
+            h_frozen_seq.detach(),
+            r_frozen_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+        )
     )
-    _, _, _, frozen_rh = compute_soft_alignment_direction_details(
-        r_frozen_seq.detach(),
-        h_seq.detach(),
-        temperature,
-        epsilon,
-        rho,
-        sinkhorn_iters,
-        struct_lambda,
-        max_forward_step,
-        teacher=teacher_rh,
+    _, frozen_metrics_rh, teacher_rh, frozen_rh = (
+        compute_soft_alignment_direction_details(
+            r_frozen_seq.detach(),
+            h_frozen_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+        )
     )
 
+  loss_hr, metrics_hr, _, adapted_hr = (
+      compute_soft_alignment_direction_details(
+          h_adapted_seq,
+          r_adapted_seq,
+          temperature,
+          feature_mode,
+          normalize_epsilon,
+          epsilon,
+          rho,
+          teacher_feature_weight,
+          sinkhorn_iters,
+          struct_lambda,
+          max_forward_step,
+          teacher=teacher_hr,
+      )
+  )
+  loss_rh, metrics_rh, _, adapted_rh = (
+      compute_soft_alignment_direction_details(
+          r_adapted_seq,
+          h_adapted_seq,
+          temperature,
+          feature_mode,
+          normalize_epsilon,
+          epsilon,
+          rho,
+          teacher_feature_weight,
+          sinkhorn_iters,
+          struct_lambda,
+          max_forward_step,
+          teacher=teacher_rh,
+      )
+  )
+
+  with torch.no_grad():
+    _, h_adapt_r_frozen_metrics, _, h_adapt_r_frozen_hr = (
+        compute_soft_alignment_direction_details(
+            h_adapted_seq.detach(),
+            r_frozen_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+            teacher=teacher_hr,
+        )
+    )
+    _, h_frozen_r_adapt_metrics, _, h_frozen_r_adapt_hr = (
+        compute_soft_alignment_direction_details(
+            h_frozen_seq.detach(),
+            r_adapted_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+            teacher=teacher_hr,
+        )
+    )
+    _, h_adapt_r_frozen_metrics_rh, _, h_adapt_r_frozen_rh = (
+        compute_soft_alignment_direction_details(
+            r_frozen_seq.detach(),
+            h_adapted_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+            teacher=teacher_rh,
+        )
+    )
+    _, h_frozen_r_adapt_metrics_rh, _, h_frozen_r_adapt_rh = (
+        compute_soft_alignment_direction_details(
+            r_adapted_seq.detach(),
+            h_frozen_seq.detach(),
+            temperature,
+            feature_mode,
+            normalize_epsilon,
+            epsilon,
+            rho,
+            teacher_feature_weight,
+            sinkhorn_iters,
+            struct_lambda,
+            max_forward_step,
+            teacher=teacher_rh,
+        )
+    )
+
+  h_adapt_r_frozen_score = 0.5 * (
+      h_adapt_r_frozen_hr + h_adapt_r_frozen_rh)
+  h_frozen_r_adapt_score = 0.5 * (
+      h_frozen_r_adapt_hr + h_frozen_r_adapt_rh)
   adapted_score = 0.5 * (adapted_hr + adapted_rh)
   frozen_score = 0.5 * (frozen_hr + frozen_rh)
   gain_gap = frozen_score - adapted_score
@@ -2338,10 +2545,24 @@ def compute_controlled_soft_alignment_paired(
           metrics_hr["loss_align"] + metrics_rh["loss_align"]),
       "struct_loss": 0.5 * (
           metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
+      "pre_norm_min": torch.minimum(
+          metrics_hr["pre_norm_min"], metrics_rh["pre_norm_min"]),
+      "pre_norm_mean": 0.5 * (
+          metrics_hr["pre_norm_mean"] + metrics_rh["pre_norm_mean"]),
       "control_adapted_score": adapted_score.mean(),
       "control_frozen_score": frozen_score.mean(),
       "control_gain_gap": gain_gap.mean(),
       "control_win_rate": (gain_gap >= margin).float().mean(),
+      "control_frozen_top1": 0.5 * (
+          frozen_metrics_hr["top1"] + frozen_metrics_rh["top1"]),
+      "control_hadapt_rfrozen_score": h_adapt_r_frozen_score.mean(),
+      "control_hfrozen_radapt_score": h_frozen_r_adapt_score.mean(),
+      "control_hadapt_rfrozen_top1": 0.5 * (
+          h_adapt_r_frozen_metrics["top1"]
+          + h_adapt_r_frozen_metrics_rh["top1"]),
+      "control_hfrozen_radapt_top1": 0.5 * (
+          h_frozen_r_adapt_metrics["top1"]
+          + h_frozen_r_adapt_metrics_rh["top1"]),
   }
   return loss, metrics, gain_loss
 
@@ -2792,8 +3013,13 @@ def main() -> None:
         f"adapter_domain={args.adapter_domain} "
         f"softdtw_mode={args.softdtw_mode} "
         f"soft_alignment_temperature={args.soft_alignment_temperature} "
+        f"soft_alignment_feature_mode={args.soft_alignment_feature_mode} "
+        f"soft_alignment_normalize_epsilon="
+        f"{args.soft_alignment_normalize_epsilon} "
         f"soft_alignment_epsilon={args.soft_alignment_epsilon} "
         f"soft_alignment_rho={args.soft_alignment_rho} "
+        f"soft_alignment_teacher_feature_weight="
+        f"{args.soft_alignment_teacher_feature_weight} "
         f"soft_alignment_sinkhorn_iters={args.soft_alignment_sinkhorn_iters} "
         f"soft_alignment_struct_lambda={args.soft_alignment_struct_lambda} "
         f"soft_alignment_max_forward_step={args.soft_alignment_max_forward_step} "
@@ -2817,6 +3043,7 @@ def main() -> None:
         f"train_backbone_norm_affine={args.train_backbone_norm_affine} "
         f"aux_teacher_stop_grad={args.aux_teacher_stop_grad} "
         f"aux_global_negatives={args.aux_global_negatives} "
+        f"grad_clip_norm={args.grad_clip_norm} "
         f"amp={args.amp} "
         f"amp_dtype={args.amp_dtype} "
         f"num_camera_slots={num_camera_slots} "
@@ -2884,6 +3111,95 @@ def main() -> None:
           and amp_dtype == torch.float16
       ),
   )
+  start_step = 0
+  resume_path = getattr(args, "resume", None)
+  resume_checkpoint = None
+  if resume_path is not None:
+    try:
+      resume_checkpoint = torch.load(
+          resume_path, map_location=device, weights_only=False)
+    except TypeError:
+      resume_checkpoint = torch.load(resume_path, map_location=device)
+    if not isinstance(resume_checkpoint, dict):
+      raise TypeError("Resume checkpoint must be a dictionary.")
+    required_resume_keys = {"step", "model", "optimizer", "args"}
+    missing_resume_keys = required_resume_keys - set(resume_checkpoint)
+    if missing_resume_keys:
+      raise KeyError(
+          f"Resume checkpoint is missing keys: {sorted(missing_resume_keys)}")
+    checkpoint_args = resume_checkpoint["args"]
+    if not isinstance(checkpoint_args, dict):
+      raise TypeError("Resume checkpoint args must be a dictionary.")
+    invariant_keys = (
+        "backbone",
+        "adapter_domain",
+        "view_mode",
+        "representation_mode",
+        "fusion_mode",
+        "num_timestamps",
+        "num_multi_view",
+        "batch_episode_pairs",
+        "softdtw_mode",
+        "soft_alignment_feature_mode",
+        "soft_alignment_normalize_epsilon",
+        "soft_alignment_teacher_feature_weight",
+        "lambda_sa",
+        "lambda_mv",
+        "lambda_control_gain",
+        "control_gain_margin",
+        "lambda_spatial_preserve",
+        "spatial_preserve_tolerance",
+        "pixel_aug",
+        "view_mask_mode",
+        "view_mask_prob",
+        "view_mask_min_views",
+        "aux_global_negatives",
+        "lr",
+        "weight_decay",
+        "grad_clip_norm",
+        "seed",
+    )
+    mismatches = {
+        key: (checkpoint_args.get(key), getattr(args, key, None))
+        for key in invariant_keys
+        if checkpoint_args.get(key) != getattr(args, key, None)
+    }
+    if mismatches:
+      raise ValueError(
+          f"Resume checkpoint/config invariant mismatches: {mismatches}")
+    start_step = int(resume_checkpoint["step"])
+    if start_step <= 0 or start_step >= args.max_iters:
+      raise ValueError(
+          f"Resume step {start_step} must be between 1 and "
+          f"max_iters-1 ({args.max_iters - 1}).")
+    raw_model.load_state_dict(resume_checkpoint["model"], strict=True)
+    optimizer.load_state_dict(resume_checkpoint["optimizer"])
+    if "scaler" in resume_checkpoint:
+      scaler.load_state_dict(resume_checkpoint["scaler"])
+    if "python_random_state" in resume_checkpoint:
+      random.setstate(resume_checkpoint["python_random_state"])
+    if "sample_rng_state" in resume_checkpoint:
+      rng.setstate(resume_checkpoint["sample_rng_state"])
+    if "torch_rng_state" in resume_checkpoint:
+      torch.set_rng_state(resume_checkpoint["torch_rng_state"].cpu())
+    if (
+        device.type == "cuda"
+        and "cuda_rng_state_all" in resume_checkpoint
+    ):
+      # The checkpoint is loaded with map_location=device, which also moves
+      # CUDA RNG byte tensors onto the GPU. PyTorch's RNG restore API expects
+      # CPU ByteTensors even when restoring CUDA generators.
+      cuda_rng_states = [
+          torch.as_tensor(state, dtype=torch.uint8, device="cpu")
+          for state in resume_checkpoint["cuda_rng_state_all"]
+      ]
+      torch.cuda.set_rng_state_all(cuda_rng_states)
+    if is_main:
+      print(
+          f"resumed checkpoint={resume_path} step={start_step} "
+          f"target_step={args.max_iters}",
+          flush=True,
+      )
 
   use_prefetch = args.prefetch_batches == 1
   uniform_views_per_group = (
@@ -2928,56 +3244,78 @@ def main() -> None:
 
   csv_name = "losses.csv" if is_main else f"losses_rank{rank}.csv"
   csv_path = args.out_dir / csv_name
-  with csv_path.open("w", newline="", encoding="utf-8") as f:
+  csv_mode = "a" if resume_path is not None else "w"
+  if resume_path is not None:
+    if not csv_path.is_file():
+      raise FileNotFoundError(
+          f"Resume requires an existing losses CSV: {csv_path}")
+    with csv_path.open("r", newline="", encoding="utf-8") as existing_file:
+      existing_rows = list(csv.DictReader(existing_file))
+    if not existing_rows:
+      raise ValueError(f"Resume losses CSV has no data rows: {csv_path}")
+    csv_last_step = int(existing_rows[-1]["step"])
+    if csv_last_step != start_step:
+      raise ValueError(
+          f"Resume losses CSV ends at step {csv_last_step}, but checkpoint "
+          f"is step {start_step}.")
+  with csv_path.open(csv_mode, newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow([
-        "step",
-        "loss_total",
-        "loss_softdtw",
-        "loss_aux",
-        "loss_aux_h",
-        "loss_aux_r",
-        "loss_align",
-        "loss_struct",
-        "loss_sa_weighted",
-        "loss_aux_weighted",
-        "lambda_sa",
-        "lambda_mv",
-        "softdtw_top1",
-        "softdtw_pos_dist",
-        "softdtw_off_dist",
-        "aux_top1_h",
-        "aux_top1_r",
-        "aux_diag_h",
-        "aux_off_h",
-        "aux_diag_r",
-        "aux_off_r",
-        "emb_std",
-        "batch_episode_pairs",
-        "images",
-        "seconds",
-        "cuda_mem_mb",
-        "adapter_grad_norm",
-        "head_grad_norm",
-        "loss_control_gain",
-        "loss_spatial_preserve",
-        "loss_control_weighted",
-        "loss_spatial_weighted",
-        "control_adapted_score",
-        "control_frozen_score",
-        "control_gain_gap",
-        "control_win_rate",
-        "spatial_relative_delta",
-        "spatial_violation_fraction",
-        "lambda_control_gain",
-        "control_gain_margin",
-        "lambda_spatial_preserve",
-        "spatial_preserve_tolerance",
-    ])
+    if csv_mode == "w":
+      writer.writerow([
+          "step",
+          "loss_total",
+          "loss_softdtw",
+          "loss_aux",
+          "loss_aux_h",
+          "loss_aux_r",
+          "loss_align",
+          "loss_struct",
+          "loss_sa_weighted",
+          "loss_aux_weighted",
+          "lambda_sa",
+          "lambda_mv",
+          "softdtw_top1",
+          "softdtw_pos_dist",
+          "softdtw_off_dist",
+          "aux_top1_h",
+          "aux_top1_r",
+          "aux_diag_h",
+          "aux_off_h",
+          "aux_diag_r",
+          "aux_off_r",
+          "emb_std",
+          "batch_episode_pairs",
+          "images",
+          "seconds",
+          "cuda_mem_mb",
+          "adapter_grad_norm",
+          "head_grad_norm",
+          "loss_control_gain",
+          "loss_spatial_preserve",
+          "loss_control_weighted",
+          "loss_spatial_weighted",
+          "control_adapted_score",
+          "control_frozen_score",
+          "control_gain_gap",
+          "control_win_rate",
+          "control_frozen_top1",
+          "control_hadapt_rfrozen_score",
+          "control_hfrozen_radapt_score",
+          "control_hadapt_rfrozen_top1",
+          "control_hfrozen_radapt_top1",
+          "spatial_relative_delta",
+          "spatial_violation_fraction",
+          "lambda_control_gain",
+          "control_gain_margin",
+          "lambda_spatial_preserve",
+          "spatial_preserve_tolerance",
+          "soft_alignment_pre_norm_min",
+          "soft_alignment_pre_norm_mean",
+      ])
     f.flush()
 
     start = time.time()
-    for step in range(1, args.max_iters + 1):
+    for step in range(start_step + 1, args.max_iters + 1):
       iter_start = time.time()
       if use_prefetch:
         if prefetch_future is None:
@@ -3124,10 +3462,11 @@ def main() -> None:
           h_aux_b_seq = z_aux_b_seq[:args.batch_episode_pairs]
           r_aux_a_seq = z_aux_a_seq[args.batch_episode_pairs:]
           r_aux_b_seq = z_aux_b_seq[args.batch_episode_pairs:]
-        r_frozen_seq = None
+        h_frozen_seq = r_frozen_seq = None
         if z_frozen_control is not None:
           frozen_z = z_frozen_control.reshape(
               2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          h_frozen_seq = frozen_z[:args.batch_episode_pairs]
           r_frozen_seq = frozen_z[args.batch_episode_pairs:]
         loss_control_gain = loss_softdtw = z_groups.new_zeros(())
         if args.softdtw_mode == "contrastive":
@@ -3158,9 +3497,9 @@ def main() -> None:
           )
         elif args.softdtw_mode == "soft_alignment":
           if args.lambda_control_gain > 0:
-            if r_frozen_seq is None:
+            if h_frozen_seq is None or r_frozen_seq is None:
               raise RuntimeError(
-                  "Control-gain training requires frozen Robot embeddings.")
+                  "Control-gain training requires frozen H/R embeddings.")
             (
                 loss_softdtw,
                 metrics,
@@ -3168,10 +3507,16 @@ def main() -> None:
             ) = compute_controlled_soft_alignment_paired(
                 h_seq,
                 r_seq,
+                h_frozen_seq,
                 r_frozen_seq,
                 temperature=args.soft_alignment_temperature,
+                feature_mode=args.soft_alignment_feature_mode,
+                normalize_epsilon=(
+                    args.soft_alignment_normalize_epsilon),
                 epsilon=args.soft_alignment_epsilon,
                 rho=args.soft_alignment_rho,
+                teacher_feature_weight=(
+                    args.soft_alignment_teacher_feature_weight),
                 sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
                 struct_lambda=args.soft_alignment_struct_lambda,
                 max_forward_step=args.soft_alignment_max_forward_step,
@@ -3182,8 +3527,13 @@ def main() -> None:
                 h_seq,
                 r_seq,
                 temperature=args.soft_alignment_temperature,
+                feature_mode=args.soft_alignment_feature_mode,
+                normalize_epsilon=(
+                    args.soft_alignment_normalize_epsilon),
                 epsilon=args.soft_alignment_epsilon,
                 rho=args.soft_alignment_rho,
+                teacher_feature_weight=(
+                    args.soft_alignment_teacher_feature_weight),
                 sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
                 struct_lambda=args.soft_alignment_struct_lambda,
                 max_forward_step=args.soft_alignment_max_forward_step,
@@ -3297,6 +3647,9 @@ def main() -> None:
         )
       scaler.scale(loss).backward()
       scaler.unscale_(optimizer)
+      if args.grad_clip_norm > 0:
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=args.grad_clip_norm)
       adapter_grad_norm = named_gradient_norm(
           raw_model, lambda name: ".late_adapter_" in name)
       head_grad_norm = named_gradient_norm(
@@ -3320,6 +3673,20 @@ def main() -> None:
           "control_gain_gap", loss_softdtw.new_zeros(()))
       control_win_rate = metrics.get(
           "control_win_rate", loss_softdtw.new_zeros(()))
+      control_frozen_top1 = metrics.get(
+          "control_frozen_top1", loss_softdtw.new_zeros(()))
+      control_hadapt_rfrozen_score = metrics.get(
+          "control_hadapt_rfrozen_score", loss_softdtw.new_zeros(()))
+      control_hfrozen_radapt_score = metrics.get(
+          "control_hfrozen_radapt_score", loss_softdtw.new_zeros(()))
+      control_hadapt_rfrozen_top1 = metrics.get(
+          "control_hadapt_rfrozen_top1", loss_softdtw.new_zeros(()))
+      control_hfrozen_radapt_top1 = metrics.get(
+          "control_hfrozen_radapt_top1", loss_softdtw.new_zeros(()))
+      soft_alignment_pre_norm_min = metrics.get(
+          "pre_norm_min", loss_softdtw.new_zeros(()))
+      soft_alignment_pre_norm_mean = metrics.get(
+          "pre_norm_mean", loss_softdtw.new_zeros(()))
       (
           log_loss,
           log_softdtw,
@@ -3350,8 +3717,15 @@ def main() -> None:
           log_control_frozen,
           log_control_gap,
           log_control_win_rate,
+          log_control_frozen_top1,
+          log_control_hadapt_rfrozen_score,
+          log_control_hfrozen_radapt_score,
+          log_control_hadapt_rfrozen_top1,
+          log_control_hfrozen_radapt_top1,
           log_spatial_relative_delta,
           log_spatial_violation,
+          log_soft_alignment_pre_norm_min,
+          log_soft_alignment_pre_norm_mean,
       ) = distributed_mean_scalars(
           [
               loss,
@@ -3383,8 +3757,15 @@ def main() -> None:
               control_frozen_score,
               control_gain_gap,
               control_win_rate,
+              control_frozen_top1,
+              control_hadapt_rfrozen_score,
+              control_hfrozen_radapt_score,
+              control_hadapt_rfrozen_top1,
+              control_hfrozen_radapt_top1,
               spatial_relative_delta,
               spatial_violation_fraction,
+              soft_alignment_pre_norm_min,
+              soft_alignment_pre_norm_mean,
           ],
           device,
           distributed,
@@ -3426,12 +3807,19 @@ def main() -> None:
           f"{log_control_frozen:.8f}",
           f"{log_control_gap:.8f}",
           f"{log_control_win_rate:.6f}",
+          f"{log_control_frozen_top1:.6f}",
+          f"{log_control_hadapt_rfrozen_score:.8f}",
+          f"{log_control_hfrozen_radapt_score:.8f}",
+          f"{log_control_hadapt_rfrozen_top1:.6f}",
+          f"{log_control_hfrozen_radapt_top1:.6f}",
           f"{log_spatial_relative_delta:.8f}",
           f"{log_spatial_violation:.6f}",
           f"{args.lambda_control_gain:.8f}",
           f"{args.control_gain_margin:.8f}",
           f"{args.lambda_spatial_preserve:.8f}",
           f"{args.spatial_preserve_tolerance:.8f}",
+          f"{log_soft_alignment_pre_norm_min:.8f}",
+          f"{log_soft_alignment_pre_norm_mean:.8f}",
       ]
       writer.writerow(row)
       if is_main and (step == 1 or step % args.log_every == 0):
@@ -3448,7 +3836,12 @@ def main() -> None:
             f"mem={row[25]}MB sec={row[24]} "
             f"grad_adapter/head={row[26]}/{row[27]} "
             f"control={row[28]} gap/win={row[34]}/{row[35]} "
-            f"spatial={row[29]} rel_delta/viol={row[36]}/{row[37]}",
+            f"four_top1=aa:{row[12]}/ff:{row[36]}/"
+            f"af:{row[39]}/fa:{row[40]} "
+            f"pre_norm_min/mean="
+            f"{log_soft_alignment_pre_norm_min:.6f}/"
+            f"{log_soft_alignment_pre_norm_mean:.6f} "
+            f"spatial={row[29]} rel_delta/viol={row[41]}/{row[42]}",
             flush=True,
         )
         f.flush()
@@ -3466,7 +3859,7 @@ def main() -> None:
             "representation_mode": args.representation_mode,
         })
         if (
-            args.adapter_domain == "robot_only"
+            args.adapter_domain in ("robot_only", "all_shared_control")
             and args.representation_mode == "backbone_pooled"
             and adapter_layout is not None
         ):
@@ -3474,13 +3867,24 @@ def main() -> None:
             model_format.update({
                 # The transferable backbone topology stays asymmetric v2;
                 # version the new training behavior independently.
-                "method3_format": "asymmetric_domains_v2",
-                "method3_objectives": "counterfactual_spatial_v1",
-                "control_gain": "shared_teacher_hinge",
+                "method3_format": (
+                    "shared_adapter_four_branch_v1"
+                    if args.adapter_domain == "all_shared_control"
+                    else "asymmetric_domains_v2"
+                ),
+                "method3_objectives": "frozen_teacher_control_v2",
+                "control_gain": "frozen_reference_teacher_hinge",
                 "spatial_preservation":
                     "same_robot_feature_map_relative_residual_hinge",
                 "lambda_control_gain": args.lambda_control_gain,
                 "control_gain_margin": args.control_gain_margin,
+                "soft_alignment_feature_mode":
+                    args.soft_alignment_feature_mode,
+                "soft_alignment_normalize_epsilon":
+                    args.soft_alignment_normalize_epsilon,
+                "soft_alignment_teacher_feature_weight":
+                    args.soft_alignment_teacher_feature_weight,
+                "grad_clip_norm": args.grad_clip_norm,
                 "lambda_spatial_preserve": args.lambda_spatial_preserve,
                 "spatial_preserve_tolerance":
                     args.spatial_preserve_tolerance,
@@ -3492,6 +3896,14 @@ def main() -> None:
                 "step": step,
                 "model": raw_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "scaler": scaler.state_dict(),
+                "python_random_state": random.getstate(),
+                "sample_rng_state": rng.getstate(),
+                "torch_rng_state": torch.get_rng_state(),
+                "cuda_rng_state_all": (
+                    torch.cuda.get_rng_state_all()
+                    if device.type == "cuda" else []
+                ),
                 "args": vars(args),
                 "model_format": model_format,
             },

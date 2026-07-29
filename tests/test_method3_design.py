@@ -278,17 +278,22 @@ def test_stopgrad_teacher_updates_only_student(loss_fn, extra_args):
 
 def test_control_gain_uses_frozen_counterfactual_without_its_gradients():
   torch.manual_seed(7)
-  human = torch.randn(2, 4, 8)
-  adapted = torch.randn(2, 4, 8, requires_grad=True)
-  frozen = torch.randn(2, 4, 8, requires_grad=True)
+  h_adapted = torch.randn(2, 4, 8, requires_grad=True)
+  r_adapted = torch.randn(2, 4, 8, requires_grad=True)
+  h_frozen = torch.randn(2, 4, 8, requires_grad=True)
+  r_frozen = torch.randn(2, 4, 8, requires_grad=True)
 
   _, metrics, gain_loss = trainer.compute_controlled_soft_alignment_paired(
-      human,
-      adapted,
-      frozen,
+      h_adapted,
+      r_adapted,
+      h_frozen,
+      r_frozen,
       temperature=0.1,
+      feature_mode="raw",
+      normalize_epsilon=1e-12,
       epsilon=0.05,
       rho=0.5,
+      teacher_feature_weight=1.0,
       sinkhorn_iters=5,
       struct_lambda=0.1,
       max_forward_step=1.0,
@@ -298,9 +303,12 @@ def test_control_gain_uses_frozen_counterfactual_without_its_gradients():
   gain_loss.backward()
 
   assert gain_loss > 0
-  assert adapted.grad is not None
-  assert torch.count_nonzero(adapted.grad) > 0
-  assert frozen.grad is None
+  assert h_adapted.grad is not None
+  assert r_adapted.grad is not None
+  assert torch.count_nonzero(h_adapted.grad) > 0
+  assert torch.count_nonzero(r_adapted.grad) > 0
+  assert h_frozen.grad is None
+  assert r_frozen.grad is None
   assert set((
       "control_adapted_score",
       "control_frozen_score",
@@ -311,16 +319,20 @@ def test_control_gain_uses_frozen_counterfactual_without_its_gradients():
 
 def test_equal_adapted_and_frozen_control_has_zero_margin_loss():
   torch.manual_seed(11)
-  human = torch.randn(2, 4, 8)
+  human = torch.randn(2, 4, 8, requires_grad=True)
   robot = torch.randn(2, 4, 8, requires_grad=True)
 
   _, _, gain_loss = trainer.compute_controlled_soft_alignment_paired(
       human,
       robot,
+      human.detach().clone(),
       robot.detach().clone(),
       temperature=0.1,
+      feature_mode="raw",
+      normalize_epsilon=1e-12,
       epsilon=0.05,
       rho=0.5,
+      teacher_feature_weight=1.0,
       sinkhorn_iters=5,
       struct_lambda=0.1,
       max_forward_step=1.0,
@@ -353,6 +365,33 @@ def test_single_view_configuration_is_explicit_and_safe():
   assert args.view_mode == "single"
 
 
+def test_vit_single_stays_on_two_branch_non_control_path():
+  args = Namespace(
+      view_mode="single",
+      num_multi_view=1,
+      fusion_mode="attention_pool",
+      pixel_aug=True,
+      view_mask_mode="none",
+      view_mask_min_views=1,
+      view_mask_prob=0.0,
+      prefetch_batches=0,
+      lambda_mv=0.5,
+      lambda_control_gain=0.0,
+      lambda_spatial_preserve=0.0,
+      adapter_domain="all",
+      backbone="vit_b16",
+      representation_mode="legacy_projected",
+      aux_teacher_stop_grad=False,
+      aux_global_negatives=False,
+  )
+
+  trainer.validate_method_configuration(args)
+
+  args.adapter_domain = "all_shared_control"
+  with pytest.raises(ValueError, match="R3M adapter backbone"):
+    trainer.validate_method_configuration(args)
+
+
 def test_control_objectives_reject_non_asymmetric_configuration():
   args = Namespace(
       view_mode="multi",
@@ -377,7 +416,7 @@ def test_control_objectives_reject_non_asymmetric_configuration():
       aux_global_negatives=True,
   )
 
-  with pytest.raises(ValueError, match="adapter_domain=robot_only"):
+  with pytest.raises(ValueError, match="controlled adapter domain"):
     trainer.validate_method_configuration(args)
 
 
