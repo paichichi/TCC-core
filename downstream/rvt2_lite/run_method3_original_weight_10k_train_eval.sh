@@ -5,7 +5,7 @@ RVT_ROOT=${RVT_ROOT:-/home/paichichi/projects/rvt-3d-policy-head-adaption}
 TCC_ROOT=${TCC_ROOT:-/home/paichichi/projects/TCC-core}
 TCC_PYTHON=${TCC_PYTHON:-/home/paichichi/miniconda3/envs/tcc-core/bin/python}
 CONDA_EXE=${CONDA_EXE:-/home/paichichi/miniconda3/bin/conda}
-CONDA_ENV=${CONDA_ENV:-hralign_py39}
+CONDA_ENV=${CONDA_ENV:-tcc-core}
 DEVICE=${DEVICE:-0}
 STAMP=${STAMP:-method3_orig_weight_10k_$(date +%Y%m%d_%H%M%S)}
 
@@ -20,7 +20,7 @@ TABLE="${BASE}/method3_orig_weight_10k_table_${STAMP}.csv"
 
 RUNS=(
   "method3_vit_8ts4v_sa1_mv05_i10k:${TCC_ROOT}/configs/wsl_lite_method3_soft_alignment_8ts4v.yaml:${TCC_ROOT}/downstream/rvt2_lite/configs/wsl_method3_vit_ln_8ts4v.yaml:vit"
-  "method3_resnet_8ts4v_sa1_mv05_i10k:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:${TCC_ROOT}/downstream/rvt2_lite/configs/method3_wsl_resnet_ln_8ts4v.yaml:resnet"
+  "method3_resnet_asym_v2_8ts4v_sa1_mv05_i10k:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:${TCC_ROOT}/downstream/rvt2_lite/configs/method3_wsl_resnet_ln_8ts4v.yaml:resnet"
 )
 
 TRAIN_TASKS="close_jar,insert_onto_square_peg,light_bulb_in,meat_off_grill,open_drawer,place_cups,place_shape_in_shape_sorter,place_wine_at_rack_location,push_buttons,put_groceries_in_cupboard,put_item_in_drawer,put_money_in_safe,reach_and_drag,slide_block_to_color_target,stack_blocks,stack_cups,sweep_to_dustpan_of_size,turn_tap"
@@ -42,25 +42,29 @@ export QT_PLUGIN_PATH="${COPPELIASIM_ROOT}"
 export QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-xcb}
 
 convert_resnet_checkpoint() {
-  "${TCC_PYTHON}" - "$1" "$2" <<'PY'
-import sys
-from pathlib import Path
-import torch
-
-source, target = map(Path, sys.argv[1:])
-checkpoint = torch.load(source, map_location="cpu")
-state = checkpoint.get("model", checkpoint)
-converted = {
-    key.removeprefix("backbone."): value
-    for key, value in state.items()
-    if key.startswith("backbone.convnet.")
+  local source_ckpt="$1"
+  local target_ckpt="$2"
+  local converter="${TCC_ROOT}/scripts/convert_tcc_r3m_to_rvt.py"
+  "${TCC_PYTHON}" "${converter}" convert \
+    "${source_ckpt}" "${target_ckpt}" --force
+  "${TCC_PYTHON}" "${converter}" validate \
+    "${target_ckpt}" --source "${source_ckpt}"
 }
-if not converted:
-    raise SystemExit("No backbone.convnet tensors found")
-target.parent.mkdir(parents=True, exist_ok=True)
-torch.save({"model": converted, "source_checkpoint": str(source)}, target)
-print(f"converted {len(converted)} tensors: {source} -> {target}")
-PY
+
+require_rvt_transfer_contract() {
+  grep -Fq 'TCC_RVT_TRANSFER_FORMAT = "tcc_rvt_resnet_v1"' \
+    "${RVT_ROOT}/rvt/train.py"
+  grep -Fq 'R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"' \
+    "${RVT_ROOT}/rvt/mvt/resnet.py"
+}
+
+require_strict_load_log() {
+  local log_path="$1"
+  if ! grep -Fq "Strict TCC/RVT convnet load OK" "${log_path}"; then
+    echo "ERROR: RVT did not confirm the strict Method3 transfer load: ${log_path}" >&2
+    tail -100 "${log_path}" >&2 || true
+    exit 1
+  fi
 }
 
 echo "STAMP=${STAMP}"
@@ -86,15 +90,15 @@ for item in "${RUNS[@]}"; do
 
   if [[ "${backbone}" == "resnet" ]]; then
     pretrain="${PRETRAIN_DIR}/${run}_rvt2_resnet_pretrain.pt"
-    if [[ ! -s "${pretrain}" ]]; then
-      convert_resnet_checkpoint "${checkpoint}" "${pretrain}"
-    fi
+    echo "CONVERT+VALIDATE ${run} ${pretrain}"
+    convert_resnet_checkpoint "${checkpoint}" "${pretrain}"
   else
     pretrain="${checkpoint}"
   fi
   RVT_RUNS+=("${run}:${rvt_cfg}:${pretrain}")
 done
 
+require_rvt_transfer_contract
 cd "${RVT_ROOT}"
 for item in "${RVT_RUNS[@]}"; do
   IFS=: read -r run rvt_cfg pretrain <<< "${item}"
@@ -110,6 +114,9 @@ for item in "${RVT_RUNS[@]}"; do
       --exp_cfg_opts "tasks ${TRAIN_TASKS} train_iterations 25000 pretrain ${pretrain} overwriter_log_dir ${output}" \
       > "${TRAIN_LOG_DIR}/${run}.log" 2>&1
     echo "TRAIN DONE ${run} $(date '+%F %T')"
+  fi
+  if [[ "${run}" == *"resnet"* ]]; then
+    require_strict_load_log "${TRAIN_LOG_DIR}/${run}.log"
   fi
   [[ -s "${output}/model_0.pth" ]]
 done

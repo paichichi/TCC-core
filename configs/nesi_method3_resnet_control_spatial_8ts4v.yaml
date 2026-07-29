@@ -1,17 +1,24 @@
-# Launch on NeSI:
-#   python train.py --exp_cfg_path configs/nesi_method3_resnet_ln_8ts4v.yaml --device 0,1
+# ResNet Method 3 v2.1: asymmetric H/R adapter training with two safeguards.
 #
-# Method 3 R3M ResNet50 late-adapter backbone, 8 timestamp groups, 4 views.
-# Loads original UnadaptedR3M.pt and trains HR-Align-style late adapters.
-# With 2 GPUs, global episode-pair batch = 2 * batch_episode_pairs.
-# Here: 16 per GPU -> 32 global pairs/step; 20k steps -> 640k pair exposures.
+#   H = frozen R3M(H)
+#   R_adapted = Adapter(frozen R3M(R))
+#   R_control = frozen R3M(R)
+#
+# The adapted and control Robot branches are scored against the same detached
+# Soft Alignment teacher. The spatial term is a same-Robot feature-map trust
+# region before global pooling; it is not Human/Robot pixel alignment.
+#
+# Single-GPU launch:
+#   python train.py \
+#     --exp_cfg_path configs/nesi_method3_resnet_control_spatial_8ts4v.yaml \
+#     --device 0
 
 data_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/TCC_RH20T
 training_index: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/training_index.pt
 pretrain_path: /nesi/nobackup/uoa04758/xzha593/datasets/HRAlign/pretrains/UnadaptedR3M.pt
 output_root: /nesi/nobackup/uoa04758/xzha593/datasets/RH20T/runs
 
-run_name: nesi_method3_resnet_asym_v2_8ts4v_lambda05_lr1e4_20k
+run_name: nesi_method3_resnet_counterfactual_spatial_v1_8ts4v_seed1_40k
 
 backbone: r3m_late_adapter
 train_backbone_adapters: true
@@ -30,9 +37,10 @@ view_mask_mode: drop_one
 view_mask_prob: 1.0
 view_mask_min_views: 3
 aux_teacher_stop_grad: true
-aux_global_negatives: true
+aux_global_negatives: false
 
-batch_episode_pairs: 12 # 16
+# One GPU, matching the previously verified 24 episode-pair capacity.
+batch_episode_pairs: 24
 num_timestamps: 8
 num_multi_view: 4
 camera_matched_pairing: true
@@ -54,8 +62,17 @@ soft_alignment_struct_lambda: 0.1
 soft_alignment_max_forward_step: 1.0
 softdtw_divergence: true
 
+# Issue 1: the adapter must beat frozen R3M under the same teacher.
+lambda_control_gain: 1.0
+control_gain_margin: 0.02
+
+# Issue 2: retain each location's direction and magnitude before pooling.
+lambda_spatial_preserve: 0.1
+spatial_preserve_tolerance: 0.2
+
 lr: 0.0001
+seed: 1
 amp_dtype: bfloat16
-max_iters: 20000
+max_iters: 40000
 log_every: 20
 save_every: 1000

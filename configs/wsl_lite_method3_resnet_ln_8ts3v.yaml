@@ -6,22 +6,28 @@ training_index: /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
 pretrain_path: /home/paichichi/data/pretrain/UnadaptedR3M.pt
 output_root: /home/paichichi/projects/TCC-core/wsl_result/tcc_core_runs
 
-run_name: wsl_lite_method3_resnet_ln_8ts3v_b4_i3000
+run_name: linux_method3_resnet_asym_v2_8ts3v_b4_i3000
 
 backbone: r3m_late_adapter
 train_backbone_adapters: true
+train_backbone_norm_affine: false
+adapter_domain: robot_only
 
 fusion_mode: attention_pool
-view_token_dropout: 0.15
-view_token_noise_std: 0.01
-attention_dropout: 0.1
-projector_dropout: 0.1
+view_mode: multi
+representation_mode: backbone_pooled
+view_token_dropout: 0.0
+view_token_noise_std: 0.0
+attention_dropout: 0.0
+projector_dropout: 0.0
 pixel_aug: false
 view_mask_mode: drop_one
 view_mask_prob: 1.0
 prefetch_batches: 1
 pin_memory: true
 view_mask_min_views: 2
+aux_teacher_stop_grad: true
+aux_global_negatives: true
 
 batch_episode_pairs: 4
 num_timestamps: 8
@@ -46,6 +52,7 @@ soft_alignment_max_forward_step: 1.0
 softdtw_divergence: true
 
 lr: 0.000075
+amp_dtype: bfloat16
 max_iters: 3000
 log_every: 50
 save_every: 3000

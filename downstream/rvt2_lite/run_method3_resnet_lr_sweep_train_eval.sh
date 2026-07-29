@@ -4,7 +4,7 @@ set -euo pipefail
 RVT_ROOT=${RVT_ROOT:-/home/paichichi/projects/rvt-3d-policy-head-adaption}
 TCC_ROOT=${TCC_ROOT:-/home/paichichi/projects/TCC-core}
 TCC_PYTHON=${TCC_PYTHON:-/home/paichichi/miniconda3/envs/tcc-core/bin/python}
-CONDA_ENV=${CONDA_ENV:-hralign_py39}
+CONDA_ENV=${CONDA_ENV:-tcc-core}
 CONDA_EXE=${CONDA_EXE:-/home/paichichi/miniconda3/bin/conda}
 DEVICE=${DEVICE:-0}
 MVT_CFG=${MVT_CFG:-${RVT_ROOT}/rvt/mvt/configs/rvt2.yaml}
@@ -44,10 +44,10 @@ TRAIN_TASKS_CSV=$(IFS=,; echo "${TRAIN_TASKS[*]}")
 EVAL_TASKS=("${LEVEL1_TASKS[@]}" "${LEVEL2_TASKS[@]}")
 
 RUN_SPECS=(
-  "method3_wsl_resnet_ln_8ts4v_lr5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:0.00005"
-  "method3_wsl_resnet_ln_8ts3v_lr5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts3v.yaml:0.00005"
-  "method3_wsl_resnet_ln_8ts4v_lr2p5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:0.000025"
-  "method3_wsl_resnet_ln_8ts3v_lr2p5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts3v.yaml:0.000025"
+  "method3_linux_resnet_asym_v2_8ts4v_lr5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:0.00005"
+  "method3_linux_resnet_asym_v2_8ts3v_lr5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts3v.yaml:0.00005"
+  "method3_linux_resnet_asym_v2_8ts4v_lr2p5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts4v.yaml:0.000025"
+  "method3_linux_resnet_asym_v2_8ts3v_lr2p5e5:${TCC_ROOT}/configs/wsl_lite_method3_resnet_ln_8ts3v.yaml:0.000025"
 )
 
 mkdir -p "${TCC_LOG_DIR}" "${PRETRAIN_DIR}" "${RUN_ROOT}" "${TRAIN_LOG_DIR}" "${EVAL_LOG_DIR}"
@@ -71,26 +71,27 @@ echo "TABLE=${TABLE}"
 convert_tcc_resnet_checkpoint() {
   local source_ckpt="$1"
   local target_ckpt="$2"
-  "${TCC_PYTHON}" - "$source_ckpt" "$target_ckpt" <<'PY'
-import sys
-from pathlib import Path
-import torch
+  local converter="${TCC_ROOT}/scripts/convert_tcc_r3m_to_rvt.py"
+  "${TCC_PYTHON}" "${converter}" convert \
+    "${source_ckpt}" "${target_ckpt}" --force
+  "${TCC_PYTHON}" "${converter}" validate \
+    "${target_ckpt}" --source "${source_ckpt}"
+}
 
-source = Path(sys.argv[1])
-target = Path(sys.argv[2])
-checkpoint = torch.load(source, map_location="cpu")
-state = checkpoint.get("model", checkpoint)
-converted = {}
-for key, value in state.items():
-    if key.startswith("backbone.convnet."):
-        converted[key.removeprefix("backbone.")] = value
-target.parent.mkdir(parents=True, exist_ok=True)
-torch.save(
-    {"model": converted, "source_checkpoint": str(source), "stripped_prefix": "backbone."},
-    target,
-)
-print(f"converted {len(converted)} tensors: {source} -> {target}")
-PY
+require_rvt_transfer_contract() {
+  grep -Fq 'TCC_RVT_TRANSFER_FORMAT = "tcc_rvt_resnet_v1"' \
+    "${RVT_ROOT}/rvt/train.py"
+  grep -Fq 'R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"' \
+    "${RVT_ROOT}/rvt/mvt/resnet.py"
+}
+
+require_strict_load_log() {
+  local log_path="$1"
+  if ! grep -Fq "Strict TCC/RVT convnet load OK" "${log_path}"; then
+    echo "ERROR: RVT did not confirm the strict Method3 transfer load: ${log_path}" >&2
+    tail -100 "${log_path}" >&2 || true
+    exit 1
+  fi
 }
 
 cd "${TCC_ROOT}"
@@ -120,11 +121,8 @@ for item in "${RUN_SPECS[@]}"; do
   fi
 
   test -s "${ckpt}"
-  if [ -s "${converted}" ]; then
-    echo "CONVERT ${run} SKIP existing ${converted}"
-  else
-    convert_tcc_resnet_checkpoint "${ckpt}" "${converted}"
-  fi
+  echo "CONVERT+VALIDATE ${run} ${converted}"
+  convert_tcc_resnet_checkpoint "${ckpt}" "${converted}"
   test -s "${converted}"
 
   if [[ "${run}" == *"8ts4v"* ]]; then
@@ -135,6 +133,7 @@ for item in "${RUN_SPECS[@]}"; do
   RVT_RUNS+=("${run}:${rvt_cfg}:${converted}")
 done
 
+require_rvt_transfer_contract
 cd "${RVT_ROOT}"
 for item in "${RVT_RUNS[@]}"; do
   IFS=: read -r run cfg pretrain <<< "${item}"
@@ -143,6 +142,7 @@ for item in "${RVT_RUNS[@]}"; do
   out_dir="${RUN_ROOT}/${run}"
   if [ -s "${out_dir}/model_0.pth" ]; then
     echo "TRAIN ${run} SKIP existing ${out_dir}/model_0.pth $(date '+%F %T')"
+    require_strict_load_log "${TRAIN_LOG_DIR}/${run}.log"
     continue
   fi
   echo "TRAIN ${run} START $(date '+%F %T')"
@@ -153,6 +153,7 @@ for item in "${RVT_RUNS[@]}"; do
     --exp_cfg_opts "tasks ${TRAIN_TASKS_CSV} train_iterations ${TRAIN_ITERATIONS} pretrain ${pretrain} overwriter_log_dir ${out_dir}" \
     > "${TRAIN_LOG_DIR}/${run}.log" 2>&1
   echo "TRAIN ${run} DONE $(date '+%F %T')"
+  require_strict_load_log "${TRAIN_LOG_DIR}/${run}.log"
   grep -E "MVT_Resnet|Manually loading|matched keys|Adapter layers|\\[Finish\\]|total_loss|trans_loss|nan|NaN" "${TRAIN_LOG_DIR}/${run}.log" | tail -60 || true
 done
 

@@ -9,6 +9,7 @@ import itertools
 import json
 import os
 import random
+import sys
 import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,8 @@ import yaml
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel
 from torchvision import transforms
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from xirl.losses import soft_dtw_sequence_distance
 from xirl.models import build_backbone
@@ -55,6 +58,124 @@ class Group:
   views: list[ViewRef]
 
 
+@dataclass
+class DomainAwareEncoding:
+  """Backbone outputs needed by asymmetric Method 3 training."""
+
+  adapted: torch.Tensor
+  frozen_control: torch.Tensor | None
+  spatial_preservation_loss: torch.Tensor
+  spatial_relative_delta: torch.Tensor
+  spatial_violation_fraction: torch.Tensor
+
+
+def encode_backbone_feature_bundle(
+    backbone: nn.Module,
+    images: torch.Tensor,
+    group_indices: torch.Tensor,
+    adapter_domain: str,
+    human_group_count: int | None,
+    include_frozen_control: bool,
+    spatial_preserve_tolerance: float,
+) -> DomainAwareEncoding:
+  """Encode H without adapters and R with an optional frozen-R control.
+
+  The spatial constraint compares the adapted and frozen feature maps of the
+  same robot image before global pooling. It never assumes pixel correspondence
+  between the human and robot domains.
+  """
+  if spatial_preserve_tolerance < 0:
+    raise ValueError("spatial_preserve_tolerance must be non-negative.")
+  if adapter_domain == "all":
+    features = torch.flatten(backbone(images), 1)
+    zero = features.new_zeros(())
+    return DomainAwareEncoding(features, None, zero, zero, zero)
+  if adapter_domain != "robot_only":
+    raise ValueError(f"Unknown adapter domain: {adapter_domain}")
+  if human_group_count is None:
+    raise ValueError("robot_only adapter mode requires human_group_count.")
+  required_methods = (
+      "forward_base",
+      "apply_adapters",
+      "pool_features",
+  )
+  if any(not hasattr(backbone, name) for name in required_methods):
+    raise TypeError(
+        "robot_only adapter mode requires an R3M late-adapter backbone.")
+  if group_indices.device != images.device:
+    raise ValueError("group_indices and images must be on the same device.")
+
+  human_mask = group_indices < human_group_count
+  robot_mask = ~human_mask
+  if not human_mask.any() or not robot_mask.any():
+    raise ValueError("A domain-aware batch must contain both H and R images.")
+
+  # The base R3M is frozen. Detaching here makes the counterfactual semantics
+  # explicit and guarantees that both auxiliary constraints update only the
+  # adapter (and downstream trainable heads), never the reference backbone.
+  base = backbone.forward_base(images).detach()
+  robot_frozen_map = base[robot_mask]
+  robot_adapted_map = backbone.apply_adapters(robot_frozen_map)
+
+  adapted = base.new_empty((images.shape[0], backbone.output_dim))
+  adapted[human_mask] = backbone.pool_features(base[human_mask])
+  adapted[robot_mask] = backbone.pool_features(robot_adapted_map)
+
+  frozen_control = None
+  if include_frozen_control:
+    frozen_control = base.new_empty((images.shape[0], backbone.output_dim))
+    frozen_control[human_mask] = backbone.pool_features(base[human_mask])
+    frozen_control[robot_mask] = backbone.pool_features(robot_frozen_map)
+
+  # RVT consumes the CxHxW map rather than only its global average. Preserve
+  # every spatial location with a scale-aware trust region. Unlike cosine-only
+  # retention, this also detects destructive changes in feature magnitude.
+  frozen_float = robot_frozen_map.float()
+  adapted_float = robot_adapted_map.float()
+  frozen_norm = torch.linalg.vector_norm(frozen_float, dim=1)
+  # ReLU feature maps contain legitimately inactive locations. Dividing those
+  # locations by a fixed epsilon turns a tiny adapter residual into an enormous
+  # outlier. Use 10% of each image's typical active-feature norm as a detached
+  # denominator floor, while retaining exact relative scaling elsewhere.
+  image_feature_scale = frozen_norm.mean(
+      dim=(-2, -1), keepdim=True).detach()
+  denominator_floor = (0.1 * image_feature_scale).clamp_min(1e-6)
+  stable_frozen_norm = torch.maximum(frozen_norm, denominator_floor)
+  relative_delta = (
+      torch.linalg.vector_norm(adapted_float - frozen_float, dim=1)
+      / stable_frozen_norm
+  )
+  violation = F.relu(relative_delta - spatial_preserve_tolerance)
+  spatial_loss = violation.square().mean()
+  violation_fraction = (violation > 0).float().mean()
+  return DomainAwareEncoding(
+      adapted=adapted,
+      frozen_control=frozen_control,
+      spatial_preservation_loss=spatial_loss,
+      spatial_relative_delta=relative_delta.mean(),
+      spatial_violation_fraction=violation_fraction,
+  )
+
+
+def encode_backbone_features(
+    backbone: nn.Module,
+    images: torch.Tensor,
+    group_indices: torch.Tensor,
+    adapter_domain: str,
+    human_group_count: int | None,
+) -> torch.Tensor:
+  """Encode H without adapters and R with adapters when requested."""
+  return encode_backbone_feature_bundle(
+      backbone,
+      images,
+      group_indices,
+      adapter_domain,
+      human_group_count,
+      include_frozen_control=False,
+      spatial_preserve_tolerance=0.0,
+  ).adapted
+
+
 class FixedSlotFusionSoftDTW(nn.Module):
   """Frozen ViT backbone + fixed camera slot fusion with separate loss heads."""
 
@@ -67,9 +188,11 @@ class FixedSlotFusionSoftDTW(nn.Module):
       backbone: str = "vit_b16",
       train_layernorm: bool = True,
       train_adapters: bool = False,
+      adapter_domain: str = "all",
   ):
     super().__init__()
     self.num_camera_slots = num_camera_slots
+    self.adapter_domain = adapter_domain
     self.backbone = build_backbone(
         backbone=backbone,
         pretrain_path=pretrain_path,
@@ -94,9 +217,15 @@ class FixedSlotFusionSoftDTW(nn.Module):
       group_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
+      human_group_count: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor]:
-    feats = self.backbone(images)
-    feats = torch.flatten(feats, 1)
+    feats = encode_backbone_features(
+        self.backbone,
+        images,
+        group_indices,
+        self.adapter_domain,
+        human_group_count,
+    )
     slots = feats.new_zeros(
         (num_groups, self.num_camera_slots, feats.shape[-1]))
     masks = feats.new_zeros((num_groups, self.num_camera_slots))
@@ -115,9 +244,15 @@ class FixedSlotFusionSoftDTW(nn.Module):
       subset_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
+      human_group_count: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    feats = self.backbone(images)
-    feats = torch.flatten(feats, 1)
+    feats = encode_backbone_features(
+        self.backbone,
+        images,
+        group_indices,
+        self.adapter_domain,
+        human_group_count,
+    )
     subset_slots = feats.new_zeros(
         (num_groups, 2, self.num_camera_slots, feats.shape[-1]))
     subset_masks = feats.new_zeros((num_groups, 2, self.num_camera_slots))
@@ -152,9 +287,16 @@ class FixedSlotFusionSoftDTW(nn.Module):
       subset_indices: torch.Tensor,
       camera_ids: torch.Tensor,
       num_groups: int,
+      human_group_count: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return self.encode_group_subsets(
-        images, group_indices, subset_indices, camera_ids, num_groups)
+        images,
+        group_indices,
+        subset_indices,
+        camera_ids,
+        num_groups,
+        human_group_count,
+    )
 
 
 class ViewSetAttentionSoftDTW(nn.Module):
@@ -172,8 +314,21 @@ class ViewSetAttentionSoftDTW(nn.Module):
       view_token_noise_std: float = 0.01,
       attention_dropout: float = 0.1,
       projector_dropout: float = 0.1,
+      adapter_domain: str = "all",
+      view_mode: str = "multi",
+      representation_mode: str = "legacy_projected",
   ):
     super().__init__()
+    if adapter_domain not in ("all", "robot_only"):
+      raise ValueError(f"Unknown adapter domain: {adapter_domain}")
+    if view_mode not in ("single", "multi"):
+      raise ValueError(f"Unknown view mode: {view_mode}")
+    if representation_mode not in ("legacy_projected", "backbone_pooled"):
+      raise ValueError(
+          f"Unknown representation mode: {representation_mode}")
+    self.adapter_domain = adapter_domain
+    self.view_mode = view_mode
+    self.representation_mode = representation_mode
     self.view_token_dropout = view_token_dropout
     self.view_token_noise_std = view_token_noise_std
     self.attention_dropout = attention_dropout
@@ -184,21 +339,38 @@ class ViewSetAttentionSoftDTW(nn.Module):
         train_adapters=train_adapters,
     )
 
-    self.view_projector = nn.Sequential(
-        nn.LayerNorm(self.backbone.output_dim),
-        nn.Linear(self.backbone.output_dim, fusion_size),
-        nn.GELU(),
-        nn.Linear(fusion_size, fusion_size),
-        nn.GELU(),
-    )
-    self.view_norm = nn.LayerNorm(fusion_size)
-    self.query = nn.Parameter(torch.randn(fusion_size) * 0.02)
-    self.pooled_norm = nn.LayerNorm(fusion_size)
-    self.projector_sdtw = nn.Linear(fusion_size, embedding_size)
-    self.projector_aux = nn.Sequential(
-        nn.Dropout(projector_dropout),
-        nn.Linear(fusion_size, embedding_size),
-    )
+    if representation_mode == "legacy_projected":
+      self.view_projector = nn.Sequential(
+          nn.LayerNorm(self.backbone.output_dim),
+          nn.Linear(self.backbone.output_dim, fusion_size),
+          nn.GELU(),
+          nn.Linear(fusion_size, fusion_size),
+          nn.GELU(),
+      )
+      token_size = fusion_size
+      self.view_norm = nn.LayerNorm(token_size)
+      self.pooled_norm = nn.LayerNorm(token_size)
+      self.projector_sdtw = nn.Linear(token_size, embedding_size)
+      self.projector_aux = nn.Sequential(
+          nn.Dropout(projector_dropout),
+          nn.Linear(token_size, embedding_size),
+      )
+    else:
+      # Soft Alignment directly constrains the transferred backbone/adapter
+      # representation. Only the small CL projector is allowed to absorb the
+      # auxiliary objective.
+      self.view_projector = nn.Identity()
+      token_size = self.backbone.output_dim
+      self.view_norm = nn.LayerNorm(token_size, elementwise_affine=False)
+      self.pooled_norm = nn.LayerNorm(token_size, elementwise_affine=False)
+      self.projector_sdtw = nn.Identity()
+      self.projector_aux = nn.Linear(
+          token_size, embedding_size, bias=False)
+    if view_mode == "multi":
+      self.query = nn.Parameter(torch.randn(token_size) * 0.02)
+    else:
+      self.register_buffer(
+          "query", torch.zeros(token_size), persistent=False)
 
   def _pack_view_tokens(
       self,
@@ -248,15 +420,79 @@ class ViewSetAttentionSoftDTW(nn.Module):
       group_indices: torch.Tensor,
       num_groups: int,
       uniform_views_per_group: int | None = None,
+      human_group_count: int | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor]:
-    feats = self.backbone(images)
-    feats = torch.flatten(feats, 1)
-    tokens_flat = self.view_norm(self.view_projector(feats))
+    encoding = encode_backbone_feature_bundle(
+        self.backbone,
+        images,
+        group_indices,
+        self.adapter_domain,
+        human_group_count,
+        include_frozen_control=False,
+        spatial_preserve_tolerance=0.0,
+    )
+    tokens_flat = self.view_norm(self.view_projector(encoding.adapted))
     return self._pack_view_tokens(
         tokens_flat,
         group_indices,
         num_groups,
         uniform_views_per_group,
+    )
+
+  def encode_view_tokens_with_control(
+      self,
+      images: torch.Tensor,
+      group_indices: torch.Tensor,
+      num_groups: int,
+      uniform_views_per_group: int | None,
+      human_group_count: int,
+      spatial_preserve_tolerance: float,
+  ) -> tuple[
+      torch.Tensor,
+      torch.Tensor,
+      torch.Tensor,
+      torch.Tensor,
+      torch.Tensor,
+      torch.Tensor,
+  ]:
+    if self.representation_mode != "backbone_pooled":
+      raise ValueError(
+          "Frozen-control training requires backbone_pooled representations.")
+    encoding = encode_backbone_feature_bundle(
+        self.backbone,
+        images,
+        group_indices,
+        self.adapter_domain,
+        human_group_count,
+        include_frozen_control=True,
+        spatial_preserve_tolerance=spatial_preserve_tolerance,
+    )
+    if encoding.frozen_control is None:
+      raise RuntimeError("Frozen robot control features were not produced.")
+    adapted_flat = self.view_norm(self.view_projector(encoding.adapted))
+    frozen_flat = self.view_norm(
+        self.view_projector(encoding.frozen_control))
+    adapted_tokens, mask = self._pack_view_tokens(
+        adapted_flat,
+        group_indices,
+        num_groups,
+        uniform_views_per_group,
+    )
+    frozen_tokens, frozen_mask = self._pack_view_tokens(
+        frozen_flat,
+        group_indices,
+        num_groups,
+        uniform_views_per_group,
+    )
+    if not torch.equal(mask, frozen_mask):
+      raise RuntimeError("Adapted and frozen controls have different masks.")
+    return (
+        adapted_tokens,
+        frozen_tokens,
+        mask,
+        encoding.spatial_preservation_loss,
+        encoding.spatial_relative_delta,
+        encoding.spatial_violation_fraction,
     )
 
   def augment_view_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -267,7 +503,7 @@ class ViewSetAttentionSoftDTW(nn.Module):
       out = out + torch.randn_like(out) * self.view_token_noise_std
     return out
 
-  def attention_pool(
+  def attention_weights(
       self,
       tokens: torch.Tensor,
       mask: torch.Tensor,
@@ -282,6 +518,20 @@ class ViewSetAttentionSoftDTW(nn.Module):
       dropped = F.dropout(weights, p=self.attention_dropout, training=True)
       denom = dropped.sum(dim=-1, keepdim=True)
       weights = torch.where(denom > 0, dropped / denom.clamp_min(1e-6), weights)
+    return weights
+
+  def attention_pool(
+      self,
+      tokens: torch.Tensor,
+      mask: torch.Tensor,
+      apply_dropout: bool,
+      weights: torch.Tensor | None = None,
+  ) -> torch.Tensor:
+    if weights is None:
+      weights = self.attention_weights(tokens, mask, apply_dropout)
+    elif weights.shape != mask.shape:
+      raise ValueError("Provided attention weights do not match the view mask.")
+    weights = weights.masked_fill(~mask, 0.0)
     pooled = (weights.unsqueeze(-1) * tokens).sum(dim=1)
     return self.pooled_norm(pooled)
 
@@ -296,9 +546,10 @@ class ViewSetAttentionSoftDTW(nn.Module):
       return mask
     if mode != "drop_one":
       raise ValueError(f"Unknown feature view mask mode: {mode}")
-    del min_views
+    if min_views < 1:
+      raise ValueError("feature_view_mask_min_views must be >= 1.")
     out = mask.clone()
-    eligible = out.sum(dim=1) > 1
+    eligible = out.sum(dim=1) > min_views
     if mask_prob < 1.0:
       eligible = eligible & (
           torch.rand(out.shape[0], device=out.device) < mask_prob)
@@ -337,17 +588,81 @@ class ViewSetAttentionSoftDTW(nn.Module):
       feature_view_mask_prob: float = 0.0,
       feature_view_mask_min_views: int = 1,
       uniform_views_per_group: int | None = None,
-  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+      human_group_count: int | None = None,
+      return_controls: bool = False,
+      spatial_preserve_tolerance: float = 0.0,
+  ) -> tuple[torch.Tensor, ...]:
     del camera_ids
-    tokens, mask = self.encode_view_tokens(
-        images,
-        group_indices,
-        num_groups,
-        uniform_views_per_group,
-    )
-    clean = self.attention_pool(tokens, mask, apply_dropout=False)
+    frozen_tokens = None
+    spatial_loss = images.new_zeros(())
+    spatial_relative_delta = images.new_zeros(())
+    spatial_violation_fraction = images.new_zeros(())
+    if return_controls:
+      if human_group_count is None:
+        raise ValueError(
+            "Frozen-control training requires human_group_count.")
+      (
+          tokens,
+          frozen_tokens,
+          mask,
+          spatial_loss,
+          spatial_relative_delta,
+          spatial_violation_fraction,
+      ) = self.encode_view_tokens_with_control(
+          images,
+          group_indices,
+          num_groups,
+          uniform_views_per_group,
+          human_group_count,
+          spatial_preserve_tolerance,
+      )
+    else:
+      tokens, mask = self.encode_view_tokens(
+          images,
+          group_indices,
+          num_groups,
+          uniform_views_per_group,
+          human_group_count,
+      )
+    if self.view_mode == "single":
+      if tokens.shape[1] != 1 or not mask.all():
+        raise ValueError(
+            "single view mode requires exactly one image per group.")
+      clean = self.pooled_norm(tokens[:, 0])
+      frozen_clean = (
+          self.pooled_norm(frozen_tokens[:, 0])
+          if frozen_tokens is not None else None
+      )
+    else:
+      clean_weights = self.attention_weights(
+          tokens, mask, apply_dropout=False)
+      alignment_weights = (
+          clean_weights.detach()
+          if frozen_tokens is not None else clean_weights
+      )
+      clean = self.attention_pool(
+          tokens,
+          mask,
+          apply_dropout=False,
+          # During counterfactual training, the common aggregation rule is
+          # fixed for both alternatives. The gain hinge therefore cannot be
+          # won merely by changing the attention head instead of the adapter.
+          weights=alignment_weights,
+      )
+      frozen_clean = (
+          self.attention_pool(
+              frozen_tokens,
+              mask,
+              apply_dropout=False,
+              weights=alignment_weights,
+          )
+          if frozen_tokens is not None else None
+      )
     z_sdtw = self.projector_sdtw(clean)
     z_aux_clean = self.projector_aux(clean)
+    if self.view_mode == "single" and aug_images is None:
+      raise ValueError(
+          "single view mode requires a pixel-augmented positive branch.")
     if aug_images is None:
       if feature_view_mask_mode == "none":
         aug_a = self.attention_pool(
@@ -364,20 +679,43 @@ class ViewSetAttentionSoftDTW(nn.Module):
             feature_view_mask_min_views,
         )
         aug = self.attention_pool(
-            self.augment_view_tokens(tokens), aug_mask, apply_dropout=True)
+            tokens, aug_mask, apply_dropout=False)
         z_aux_aug = self.projector_aux(aug)
     else:
       if aug_group_indices is None or aug_num_groups is None:
         raise ValueError("Augmented view-set inputs require group indices.")
       del aug_camera_ids
       aug_tokens, aug_mask = self.encode_view_tokens(
-          aug_images, aug_group_indices, aug_num_groups)
-      aug = self.attention_pool(aug_tokens, aug_mask, apply_dropout=True)
+          aug_images,
+          aug_group_indices,
+          aug_num_groups,
+          human_group_count=human_group_count,
+      )
+      if self.view_mode == "single":
+        if aug_tokens.shape[1] != 1 or not aug_mask.all():
+          raise ValueError(
+              "single view augmentation requires exactly one image per group.")
+        aug = self.pooled_norm(aug_tokens[:, 0])
+      else:
+        aug = self.attention_pool(
+            aug_tokens, aug_mask, apply_dropout=False)
       z_aux_aug = self.projector_aux(aug)
-    return (
+    outputs = (
         F.normalize(z_sdtw, dim=-1),
         F.normalize(z_aux_clean, dim=-1),
         F.normalize(z_aux_aug, dim=-1),
+    )
+    if not return_controls:
+      return outputs
+    if frozen_clean is None:
+      raise RuntimeError("Frozen control pooling was not computed.")
+    frozen_z_sdtw = F.normalize(
+        self.projector_sdtw(frozen_clean).detach(), dim=-1)
+    return outputs + (
+        frozen_z_sdtw,
+        spatial_loss,
+        spatial_relative_delta,
+        spatial_violation_fraction,
     )
 
 
@@ -485,6 +823,35 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
       type=float,
   )
   parser.add_argument("--lambda-mv", type=float)
+  parser.add_argument(
+      "--lambda-control-gain",
+      type=float,
+      help=(
+          "Weight for requiring adapted Robot features to outperform the "
+          "frozen-R3M Robot control under the same Soft Alignment teacher."
+      ),
+  )
+  parser.add_argument(
+      "--control-gain-margin",
+      type=float,
+      help="Required per-pair Soft Alignment improvement over frozen R3M.",
+  )
+  parser.add_argument(
+      "--lambda-spatial-preserve",
+      type=float,
+      help=(
+          "Weight for the same-Robot spatial feature-map trust region before "
+          "global pooling."
+      ),
+  )
+  parser.add_argument(
+      "--spatial-preserve-tolerance",
+      type=float,
+      help=(
+          "Unpenalized per-location relative residual between frozen and "
+          "adapted Robot feature maps."
+      ),
+  )
   parser.add_argument("--mv-temperature", type=float)
   parser.add_argument(
       "--mv-soft-temporal",
@@ -549,6 +916,23 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
           "treats sampled views as an unordered set and ignores camera ids."
       ),
   )
+  parser.add_argument(
+      "--view-mode",
+      choices=("auto", "single", "multi"),
+      help=(
+          "single bypasses attention pooling and uses image augmentation CL; "
+          "multi uses full/subset view-set consistency. auto infers from "
+          "--num-multi-view."
+      ),
+  )
+  parser.add_argument(
+      "--representation-mode",
+      choices=("legacy_projected", "backbone_pooled"),
+      help=(
+          "backbone_pooled applies Soft Alignment directly to the pooled "
+          "backbone/adapter representation and keeps only a small CL head."
+      ),
+  )
   parser.add_argument("--num-camera-slots", type=int)
   parser.add_argument("--view-token-dropout", type=float)
   parser.add_argument("--view-token-noise-std", type=float)
@@ -594,11 +978,45 @@ def build_parser(parents=None) -> argparse.ArgumentParser:
       default=argparse.SUPPRESS,
       help="Also fine-tune HR-Align late adapter weights for R3M backbones.",
   )
+  parser.add_argument(
+      "--train-backbone-norm-affine",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help="Fine-tune backbone LayerNorm/BatchNorm affine parameters.",
+  )
+  parser.add_argument(
+      "--adapter-domain",
+      choices=("all", "robot_only"),
+      help="Apply late adapters to every stream or only to Robot images.",
+  )
+  parser.add_argument(
+      "--aux-teacher-stop-grad",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help=(
+          "Treat the canonical/full representation as a stop-gradient teacher "
+          "for the augmented/subset auxiliary branch."
+      ),
+  )
+  parser.add_argument(
+      "--aux-global-negatives",
+      action=argparse.BooleanOptionalAction,
+      default=argparse.SUPPRESS,
+      help=(
+          "Gather detached auxiliary teachers across DDP ranks so every local "
+          "student is contrasted against the global teacher bank."
+      ),
+  )
   parser.add_argument("--pretrain-path")
   parser.add_argument(
       "--amp",
       action=argparse.BooleanOptionalAction,
       default=argparse.SUPPRESS,
+  )
+  parser.add_argument(
+      "--amp-dtype",
+      choices=("float16", "bfloat16"),
+      help="CUDA autocast dtype. bfloat16 does not require gradient scaling.",
   )
   return parser
 
@@ -644,6 +1062,10 @@ def parse_args() -> argparse.Namespace:
     args.out_dir = args.output_root / args.run_name
   if not hasattr(args, "fusion_mode"):
     args.fusion_mode = "fixed_slot"
+  if not hasattr(args, "view_mode"):
+    args.view_mode = "auto"
+  if not hasattr(args, "representation_mode"):
+    args.representation_mode = "legacy_projected"
   if not hasattr(args, "softdtw_mode"):
     args.softdtw_mode = "contrastive"
   if not hasattr(args, "mv_soft_temporal"):
@@ -676,6 +1098,14 @@ def parse_args() -> argparse.Namespace:
     args.soft_alignment_max_forward_step = 1.0
   if not hasattr(args, "lambda_sa"):
     args.lambda_sa = 1.0
+  if not hasattr(args, "lambda_control_gain"):
+    args.lambda_control_gain = 0.0
+  if not hasattr(args, "control_gain_margin"):
+    args.control_gain_margin = 0.02
+  if not hasattr(args, "lambda_spatial_preserve"):
+    args.lambda_spatial_preserve = 0.0
+  if not hasattr(args, "spatial_preserve_tolerance"):
+    args.spatial_preserve_tolerance = 0.2
   if not hasattr(args, "view_token_dropout"):
     args.view_token_dropout = 0.15
   if not hasattr(args, "view_token_noise_std"):
@@ -696,11 +1126,109 @@ def parse_args() -> argparse.Namespace:
     args.backbone = "vit_b16"
   if not hasattr(args, "train_backbone_adapters"):
     args.train_backbone_adapters = False
+  if not hasattr(args, "train_backbone_norm_affine"):
+    args.train_backbone_norm_affine = True
+  if not hasattr(args, "adapter_domain"):
+    args.adapter_domain = "all"
+  if not hasattr(args, "aux_teacher_stop_grad"):
+    args.aux_teacher_stop_grad = False
+  if not hasattr(args, "aux_global_negatives"):
+    args.aux_global_negatives = False
+  if not hasattr(args, "amp_dtype"):
+    args.amp_dtype = "float16"
   if not hasattr(args, "prefetch_batches"):
     args.prefetch_batches = 0
   if not hasattr(args, "pin_memory"):
     args.pin_memory = False
   return coerce_path_args(args)
+
+
+def validate_method_configuration(args: argparse.Namespace) -> None:
+  lambda_control_gain = getattr(args, "lambda_control_gain", 0.0)
+  control_gain_margin = getattr(args, "control_gain_margin", 0.0)
+  lambda_spatial_preserve = getattr(args, "lambda_spatial_preserve", 0.0)
+  spatial_preserve_tolerance = getattr(
+      args, "spatial_preserve_tolerance", 0.2)
+  if lambda_control_gain < 0 or lambda_spatial_preserve < 0:
+    raise ValueError("Auxiliary objective weights must be non-negative.")
+  if control_gain_margin < 0:
+    raise ValueError("control_gain_margin must be non-negative.")
+  if spatial_preserve_tolerance < 0:
+    raise ValueError("spatial_preserve_tolerance must be non-negative.")
+
+  if args.view_mode == "auto":
+    args.view_mode = "single" if args.num_multi_view == 1 else "multi"
+  if args.view_mode == "single":
+    if args.num_multi_view != 1:
+      raise ValueError("single view mode requires --num-multi-view=1.")
+    if args.fusion_mode != "attention_pool":
+      raise ValueError("single view mode requires attention_pool.")
+    if not args.pixel_aug:
+      raise ValueError(
+          "single view mode requires --pixel-aug for within-domain CL.")
+    if args.view_mask_mode != "none":
+      raise ValueError("single view mode cannot use view masking.")
+    if args.prefetch_batches:
+      raise ValueError(
+          "single view mode currently requires --prefetch-batches=0.")
+  elif args.view_mode == "multi":
+    if args.num_multi_view < 2:
+      raise ValueError("multi view mode requires at least two views.")
+    if (
+        args.view_mask_mode == "drop_one"
+        and args.view_mask_min_views >= args.num_multi_view
+        and args.lambda_mv > 0
+        and not args.pixel_aug
+    ):
+      raise ValueError(
+          "drop_one cannot create a subset when view_mask_min_views is "
+          "greater than or equal to num_multi_view.")
+  else:
+    raise ValueError(f"Unknown view mode: {args.view_mode}")
+
+  adapter_backbones = {
+      "r3m_late_adapter",
+      "r3m_adapter",
+      "r3m_hralign_style",
+      "r3m_align_l",
+      "hralign_r3m_l",
+      "adapted_r3m",
+  }
+  if args.adapter_domain == "robot_only" and args.backbone not in adapter_backbones:
+    raise ValueError(
+        "robot_only adapter mode requires an R3M adapter backbone.")
+  if (
+      args.representation_mode == "backbone_pooled"
+      and args.fusion_mode != "attention_pool"
+  ):
+    raise ValueError(
+        "backbone_pooled representation requires attention_pool.")
+  if args.aux_global_negatives and not args.aux_teacher_stop_grad:
+    raise ValueError(
+        "aux_global_negatives currently requires aux_teacher_stop_grad.")
+  if args.fusion_mode == "fixed_slot" and args.aux_teacher_stop_grad:
+    raise ValueError(
+        "fixed_slot has two arbitrary subsets and cannot define a full-set "
+        "stop-gradient teacher.")
+  if lambda_control_gain > 0 or lambda_spatial_preserve > 0:
+    if args.adapter_domain != "robot_only":
+      raise ValueError(
+          "Control/spatial objectives require adapter_domain=robot_only.")
+    if args.backbone not in adapter_backbones:
+      raise ValueError(
+          "Control/spatial objectives require an R3M adapter backbone.")
+    if not getattr(args, "train_backbone_adapters", False):
+      raise ValueError(
+          "Control/spatial objectives require train_backbone_adapters=true.")
+    if args.fusion_mode != "attention_pool":
+      raise ValueError(
+          "Control/spatial objectives require attention_pool.")
+    if args.representation_mode != "backbone_pooled":
+      raise ValueError(
+          "Control/spatial objectives require backbone_pooled representations.")
+  if lambda_control_gain > 0 and args.softdtw_mode != "soft_alignment":
+    raise ValueError(
+        "The frozen-R3M control gain is defined only for soft_alignment.")
 
 
 def normalize_max_groups(max_groups: int | None) -> int | None:
@@ -1199,9 +1727,24 @@ def stratified_group_sample(
   return selected
 
 
-def load_image(root: Path, rel_path: str, transform) -> torch.Tensor:
+def load_image(
+    root: Path,
+    rel_path: str,
+    transform,
+    transform_seed: int | None = None,
+) -> torch.Tensor:
   with Image.open(root / rel_path) as image:
-    return transform(image.convert("RGB"))
+    rgb = image.convert("RGB")
+    if transform_seed is None:
+      return transform(rgb)
+    python_random_state = random.getstate()
+    try:
+      random.seed(transform_seed)
+      with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(transform_seed)
+        return transform(rgb)
+    finally:
+      random.setstate(python_random_state)
 
 
 def move_batch_tensor(
@@ -1301,12 +1844,13 @@ def sample_masked_views(
     min_views: int,
     rng: random.Random,
 ) -> list[ViewRef]:
-  del min_views
+  if min_views < 1:
+    raise ValueError("view_mask_min_views must be >= 1.")
   if mode == "none" or rng.random() >= mask_prob:
     return list(views)
   if mode != "drop_one":
     raise ValueError(f"Unknown view_mask_mode: {mode}")
-  if len(views) <= 1:
+  if len(views) <= min_views:
     return list(views)
   selected = list(views)
   drop_idx = rng.randrange(len(selected))
@@ -1338,10 +1882,14 @@ def prepare_clean_aug_batch_images(
   clean_group_indices = []
   clean_camera_ids = []
   aug_views = []
+  aug_seeds = []
   aug_group_indices = []
   aug_camera_ids = []
   group_idx = 0
   for sequence in sequences:
+    # Replaying one augmentation seed for every frame/view in a sequence
+    # avoids artificial temporal flicker in the positive branch.
+    sequence_aug_seed = rng.getrandbits(63)
     for group in sequence:
       for view in group.views:
         clean_views.append(view)
@@ -1356,6 +1904,7 @@ def prepare_clean_aug_batch_images(
       )
       for view in masked_views:
         aug_views.append(view)
+        aug_seeds.append(sequence_aug_seed)
         aug_group_indices.append(group_idx)
         aug_camera_ids.append(view.camera_id)
       group_idx += 1
@@ -1363,7 +1912,13 @@ def prepare_clean_aug_batch_images(
       load_image(root, view.rel_path, clean_transform) for view in clean_views
   ]
   aug_images = [
-      load_image(root, view.rel_path, aug_transform) for view in aug_views
+      load_image(
+          root,
+          view.rel_path,
+          aug_transform,
+          transform_seed=aug_seed,
+      )
+      for view, aug_seed in zip(aug_views, aug_seeds)
   ]
   return (
       move_batch_tensor(torch.stack(clean_images, dim=0), device, pin_memory),
@@ -1543,14 +2098,83 @@ def make_progress_transition_cost(
   )
 
 
-def compute_structural_progress_loss(prob, transition_cost):
+def compute_structural_progress_loss_per_pair(prob, transition_cost):
   if prob.shape[1] <= 1:
-    return prob.new_zeros(())
+    return prob.new_zeros((prob.shape[0],))
   prev_prob = prob[:, :-1]
   next_prob = prob[:, 1:]
   expected_cost = torch.einsum(
       "bik,kl,bil->bi", prev_prob, transition_cost, next_prob)
-  return expected_cost.mean()
+  return expected_cost.mean(dim=1)
+
+
+def compute_structural_progress_loss(prob, transition_cost):
+  return compute_structural_progress_loss_per_pair(
+      prob, transition_cost).mean()
+
+
+def compute_soft_alignment_direction_details(
+    source_seq,
+    target_seq,
+    temperature,
+    epsilon,
+    rho,
+    sinkhorn_iters,
+    struct_lambda,
+    max_forward_step,
+    teacher=None,
+):
+  """Score one alignment direction, optionally against a shared teacher."""
+  source = F.normalize(source_seq.float(), dim=-1)
+  target = F.normalize(target_seq.float(), dim=-1)
+  similarity = torch.einsum("btd,bsd->bts", source, target)
+  pred_log_prob = F.log_softmax(similarity / temperature, dim=2)
+  pred_prob = pred_log_prob.exp()
+
+  cost = 1.0 - similarity
+  if teacher is None:
+    temporal_prior = make_temporal_prior_cost(
+        source.shape[1], source.device, source.dtype)
+    teacher_cost = cost + rho * temporal_prior[None]
+    with torch.no_grad():
+      kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
+      teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
+  else:
+    if teacher.shape != pred_log_prob.shape:
+      raise ValueError(
+          "Shared Soft Alignment teacher and prediction shapes differ.")
+    teacher = teacher.detach().to(
+        device=pred_log_prob.device, dtype=pred_log_prob.dtype)
+
+  loss_align_per_pair = -(
+      teacher * pred_log_prob).sum(dim=2).mean(dim=1)
+  transition_cost = make_progress_transition_cost(
+      source.shape[1],
+      max_forward_step,
+      source.device,
+      source.dtype,
+  )
+  loss_struct_per_pair = compute_structural_progress_loss_per_pair(
+      pred_prob, transition_cost)
+  loss_per_pair = (
+      loss_align_per_pair + struct_lambda * loss_struct_per_pair)
+  loss_align = loss_align_per_pair.mean()
+  loss_struct = loss_struct_per_pair.mean()
+  loss = loss_per_pair.mean()
+
+  labels = torch.arange(source.shape[1], device=source.device)
+  top1 = (pred_prob.argmax(dim=2) == labels[None]).float().mean()
+  diagonal = cost.diagonal(dim1=1, dim2=2)
+  off = (cost.sum() - diagonal.sum()) / max(
+      1, cost.numel() - source.shape[0] * source.shape[1])
+  metrics = {
+      "top1": top1,
+      "pos_dist": diagonal.mean(),
+      "off_dist": off,
+      "loss_align": loss_align,
+      "loss_struct": loss_struct,
+  }
+  return loss, metrics, teacher.detach(), loss_per_pair
 
 
 def compute_soft_alignment_direction(
@@ -1563,42 +2187,17 @@ def compute_soft_alignment_direction(
     struct_lambda,
     max_forward_step,
 ):
-  source = F.normalize(source_seq.float(), dim=-1)
-  target = F.normalize(target_seq.float(), dim=-1)
-  similarity = torch.einsum("btd,bsd->bts", source, target)
-  pred_log_prob = F.log_softmax(similarity / temperature, dim=2)
-  pred_prob = pred_log_prob.exp()
-
-  cost = 1.0 - similarity
-  temporal_prior = make_temporal_prior_cost(
-      source.shape[1], source.device, source.dtype)
-  teacher_cost = cost + rho * temporal_prior[None]
-  with torch.no_grad():
-    kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
-    teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
-
-  loss_align = -(teacher * pred_log_prob).sum(dim=2).mean()
-  transition_cost = make_progress_transition_cost(
-      source.shape[1],
+  loss, metrics, _, _ = compute_soft_alignment_direction_details(
+      source_seq,
+      target_seq,
+      temperature,
+      epsilon,
+      rho,
+      sinkhorn_iters,
+      struct_lambda,
       max_forward_step,
-      source.device,
-      source.dtype,
   )
-  loss_struct = compute_structural_progress_loss(pred_prob, transition_cost)
-  loss = loss_align + struct_lambda * loss_struct
-
-  labels = torch.arange(source.shape[1], device=source.device)
-  top1 = (pred_prob.argmax(dim=2) == labels[None]).float().mean()
-  diagonal = cost.diagonal(dim1=1, dim2=2)
-  off = (cost.sum() - diagonal.sum()) / max(
-      1, cost.numel() - source.shape[0] * source.shape[1])
-  return loss, {
-      "top1": top1,
-      "pos_dist": diagonal.mean(),
-      "off_dist": off,
-      "loss_align": loss_align,
-      "loss_struct": loss_struct,
-  }
+  return loss, metrics
 
 
 def compute_soft_alignment_paired(
@@ -1647,6 +2246,104 @@ def compute_soft_alignment_paired(
       "struct_loss": 0.5 * (
           metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
   }
+
+
+def compute_controlled_soft_alignment_paired(
+    h_seq,
+    r_adapted_seq,
+    r_frozen_seq,
+    temperature,
+    epsilon,
+    rho,
+    sinkhorn_iters,
+    struct_lambda,
+    max_forward_step,
+    margin,
+):
+  """Compare adapted and frozen Robot features under identical teachers.
+
+  The adapted H/R pair constructs one detached teacher per direction. Both
+  Robot alternatives are then scored against that exact target distribution.
+  The frozen branch is a counterfactual baseline and receives no gradients.
+  """
+  if h_seq.ndim != 3:
+    raise ValueError("Soft alignment sequences must have shape [B, T, D].")
+  if h_seq.shape != r_adapted_seq.shape or h_seq.shape != r_frozen_seq.shape:
+    raise ValueError(
+        "Controlled Soft Alignment sequences must have identical shapes.")
+  if margin < 0:
+    raise ValueError("Control gain margin must be non-negative.")
+
+  loss_hr, metrics_hr, teacher_hr, adapted_hr = (
+      compute_soft_alignment_direction_details(
+          h_seq,
+          r_adapted_seq,
+          temperature,
+          epsilon,
+          rho,
+          sinkhorn_iters,
+          struct_lambda,
+          max_forward_step,
+      )
+  )
+  loss_rh, metrics_rh, teacher_rh, adapted_rh = (
+      compute_soft_alignment_direction_details(
+          r_adapted_seq,
+          h_seq,
+          temperature,
+          epsilon,
+          rho,
+          sinkhorn_iters,
+          struct_lambda,
+          max_forward_step,
+      )
+  )
+  with torch.no_grad():
+    _, _, _, frozen_hr = compute_soft_alignment_direction_details(
+        h_seq.detach(),
+        r_frozen_seq.detach(),
+        temperature,
+        epsilon,
+        rho,
+        sinkhorn_iters,
+        struct_lambda,
+        max_forward_step,
+        teacher=teacher_hr,
+    )
+    _, _, _, frozen_rh = compute_soft_alignment_direction_details(
+        r_frozen_seq.detach(),
+        h_seq.detach(),
+        temperature,
+        epsilon,
+        rho,
+        sinkhorn_iters,
+        struct_lambda,
+        max_forward_step,
+        teacher=teacher_rh,
+    )
+
+  adapted_score = 0.5 * (adapted_hr + adapted_rh)
+  frozen_score = 0.5 * (frozen_hr + frozen_rh)
+  gain_gap = frozen_score - adapted_score
+  gain_loss = F.relu(margin - gain_gap).mean()
+  loss = 0.5 * (loss_hr + loss_rh)
+  metrics = {
+      "distances": None,
+      "top1": 0.5 * (metrics_hr["top1"] + metrics_rh["top1"]),
+      "pos_dist": 0.5 * (
+          metrics_hr["pos_dist"] + metrics_rh["pos_dist"]),
+      "off_dist": 0.5 * (
+          metrics_hr["off_dist"] + metrics_rh["off_dist"]),
+      "align_loss": 0.5 * (
+          metrics_hr["loss_align"] + metrics_rh["loss_align"]),
+      "struct_loss": 0.5 * (
+          metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
+      "control_adapted_score": adapted_score.mean(),
+      "control_frozen_score": frozen_score.mean(),
+      "control_gain_gap": gain_gap.mean(),
+      "control_win_rate": (gain_gap >= margin).float().mean(),
+  }
+  return loss, metrics, gain_loss
 
 
 def tcc_scaled_similarity(
@@ -1806,11 +2503,63 @@ def compute_hr_vvcl(
   }
 
 
+def gather_detached_teacher_bank(
+    teacher: torch.Tensor,
+    global_negatives: bool,
+) -> tuple[torch.Tensor, int]:
+  if (
+      not global_negatives
+      or not dist.is_available()
+      or not dist.is_initialized()
+  ):
+    return teacher.detach(), 0
+
+  world_size = dist.get_world_size()
+  rank = dist.get_rank()
+  local_size = torch.tensor(
+      [teacher.shape[0]], device=teacher.device, dtype=torch.long)
+  gathered_sizes = [torch.zeros_like(local_size) for _ in range(world_size)]
+  dist.all_gather(gathered_sizes, local_size)
+  sizes = [int(size.item()) for size in gathered_sizes]
+  if len(set(sizes)) != 1:
+    raise ValueError(
+        f"Global auxiliary negatives require equal local batches: {sizes}")
+
+  detached = teacher.detach().contiguous()
+  gathered = [torch.empty_like(detached) for _ in range(world_size)]
+  dist.all_gather(gathered, detached)
+  return torch.cat(gathered, dim=0), rank * teacher.shape[0]
+
+
 def compute_multiview_infonce(
     z_a,
     z_b,
     temperature,
+    stopgrad_teacher=False,
+    global_negatives=False,
 ):
+  if stopgrad_teacher:
+    teacher_bank, label_offset = gather_detached_teacher_bank(
+        z_a, global_negatives)
+    sims = z_b @ teacher_bank.t()
+    logits = sims / temperature
+    labels = (
+        torch.arange(z_b.shape[0], device=logits.device)
+        + label_offset
+    )
+    loss = F.cross_entropy(logits, labels)
+    top1 = (sims.argmax(dim=1) == labels).float().mean()
+    positives = sims[
+        torch.arange(z_b.shape[0], device=sims.device), labels]
+    diag = positives.mean()
+    off = (sims.sum() - positives.sum()) / max(
+        1, sims.numel() - z_b.shape[0])
+    return loss, {
+        "top1": top1,
+        "diag": diag,
+        "off": off,
+    }
+
   sims = z_a @ z_b.t()
   logits = sims / temperature
   labels = torch.arange(logits.shape[0], device=logits.device)
@@ -1863,6 +2612,8 @@ def compute_soft_temporal_infonce(
     temperature,
     alpha,
     tau,
+    stopgrad_teacher=False,
+    global_negatives=False,
 ):
   expected = num_sequences * num_timestamps
   if z_a.shape[0] != expected or z_b.shape[0] != expected:
@@ -1873,9 +2624,15 @@ def compute_soft_temporal_infonce(
   if alpha < 0 or alpha > 1:
     raise ValueError("--mv-soft-temporal-alpha must be in [0, 1].")
 
-  sims = z_a @ z_b.t()
+  if stopgrad_teacher:
+    teacher_bank, label_offset = gather_detached_teacher_bank(
+        z_a, global_negatives)
+    sims = z_b @ teacher_bank.t()
+  else:
+    label_offset = 0
+    sims = z_a @ z_b.t()
   logits = sims / temperature
-  target = _cached_soft_temporal_target(
+  local_target = _cached_soft_temporal_target(
       num_sequences,
       num_timestamps,
       alpha,
@@ -1883,18 +2640,31 @@ def compute_soft_temporal_infonce(
       str(z_a.device),
       z_a.dtype,
   )
+  if stopgrad_teacher and teacher_bank.shape[0] != expected:
+    target = z_a.new_zeros((expected, teacher_bank.shape[0]))
+    target[:, label_offset:label_offset + expected] = local_target
+  else:
+    target = local_target
 
   loss_ab = -(target * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
-  loss_ba = -(target * F.log_softmax(logits.t(), dim=1)).sum(dim=1).mean()
-  loss = 0.5 * (loss_ab + loss_ba)
+  if stopgrad_teacher:
+    loss = loss_ab
+  else:
+    loss_ba = -(target * F.log_softmax(logits.t(), dim=1)).sum(dim=1).mean()
+    loss = 0.5 * (loss_ab + loss_ba)
 
-  labels = torch.arange(expected, device=z_a.device)
+  labels = torch.arange(expected, device=z_a.device) + label_offset
   top1_ab = (sims.argmax(dim=1) == labels).float().mean()
-  top1_ba = (sims.argmax(dim=0) == labels).float().mean()
-  diag = sims.diag().mean()
-  off = (sims.sum() - sims.diag().sum()) / max(1, sims.numel() - expected)
+  if stopgrad_teacher:
+    top1 = top1_ab
+  else:
+    top1_ba = (sims.argmax(dim=0) == labels).float().mean()
+    top1 = 0.5 * (top1_ab + top1_ba)
+  positives = sims[torch.arange(expected, device=sims.device), labels]
+  diag = positives.mean()
+  off = (sims.sum() - positives.sum()) / max(1, sims.numel() - expected)
   return loss, {
-      "top1": 0.5 * (top1_ab + top1_ba),
+      "top1": top1,
       "diag": diag,
       "off": off,
   }
@@ -1910,6 +2680,36 @@ def trainable_summary(model):
       f"trainable={trainable}/{total} "
       f"backbone={backbone_train}/{backbone_total}"
   )
+
+
+def named_gradient_norm(model, include_name) -> float:
+  squared = None
+  for name, parameter in model.named_parameters():
+    if (
+        not include_name(name)
+        or parameter.grad is None
+    ):
+      continue
+    value = parameter.grad.detach().float().square().sum()
+    squared = value if squared is None else squared + value
+  return squared.sqrt().item() if squared is not None else 0.0
+
+
+def distributed_mean_scalars(
+    values,
+    device: torch.device,
+    distributed: bool,
+) -> list[float]:
+  packed = torch.stack([
+      value.detach().float().to(device)
+      if isinstance(value, torch.Tensor)
+      else torch.tensor(float(value), device=device)
+      for value in values
+  ])
+  if distributed:
+    dist.all_reduce(packed, op=dist.ReduceOp.SUM)
+    packed /= dist.get_world_size()
+  return packed.cpu().tolist()
 
 
 def init_distributed(args: argparse.Namespace):
@@ -1935,6 +2735,7 @@ def cleanup_distributed(distributed: bool):
 
 def main() -> None:
   args = parse_args()
+  validate_method_configuration(args)
   args.out_dir.mkdir(parents=True, exist_ok=True)
   distributed, rank, local_rank, world_size, device = init_distributed(args)
   is_main = rank == 0
@@ -1984,8 +2785,11 @@ def main() -> None:
         f"tasks={len(task_to_episodes)} "
         f"num_timestamps={args.num_timestamps} "
         f"num_multi_view={args.num_multi_view} "
+        f"view_mode={args.view_mode} "
         f"fusion_mode={args.fusion_mode} "
+        f"representation_mode={args.representation_mode} "
         f"backbone={args.backbone} "
+        f"adapter_domain={args.adapter_domain} "
         f"softdtw_mode={args.softdtw_mode} "
         f"soft_alignment_temperature={args.soft_alignment_temperature} "
         f"soft_alignment_epsilon={args.soft_alignment_epsilon} "
@@ -1995,6 +2799,10 @@ def main() -> None:
         f"soft_alignment_max_forward_step={args.soft_alignment_max_forward_step} "
         f"lambda_sa={args.lambda_sa} "
         f"lambda_mv={args.lambda_mv} "
+        f"lambda_control_gain={args.lambda_control_gain} "
+        f"control_gain_margin={args.control_gain_margin} "
+        f"lambda_spatial_preserve={args.lambda_spatial_preserve} "
+        f"spatial_preserve_tolerance={args.spatial_preserve_tolerance} "
         f"mv_soft_temporal={args.mv_soft_temporal} "
         f"mv_soft_temporal_alpha={args.mv_soft_temporal_alpha} "
         f"mv_soft_temporal_tau={args.mv_soft_temporal_tau} "
@@ -2006,6 +2814,11 @@ def main() -> None:
         f"prefetch_batches={args.prefetch_batches} "
         f"pin_memory={args.pin_memory} "
         f"train_backbone_adapters={args.train_backbone_adapters} "
+        f"train_backbone_norm_affine={args.train_backbone_norm_affine} "
+        f"aux_teacher_stop_grad={args.aux_teacher_stop_grad} "
+        f"aux_global_negatives={args.aux_global_negatives} "
+        f"amp={args.amp} "
+        f"amp_dtype={args.amp_dtype} "
         f"num_camera_slots={num_camera_slots} "
         f"camera_matched_pairing={args.camera_matched_pairing} "
         f"world_size={world_size} "
@@ -2023,8 +2836,9 @@ def main() -> None:
         fusion_size=args.fusion_size,
         pretrain_path=args.pretrain_path,
         backbone=args.backbone,
-        train_layernorm=True,
+        train_layernorm=args.train_backbone_norm_affine,
         train_adapters=args.train_backbone_adapters,
+        adapter_domain=args.adapter_domain,
     ).to(device).train()
   elif args.fusion_mode == "attention_pool":
     raw_model = ViewSetAttentionSoftDTW(
@@ -2032,12 +2846,15 @@ def main() -> None:
         fusion_size=args.fusion_size,
         pretrain_path=args.pretrain_path,
         backbone=args.backbone,
-        train_layernorm=True,
+        train_layernorm=args.train_backbone_norm_affine,
         train_adapters=args.train_backbone_adapters,
         view_token_dropout=args.view_token_dropout,
         view_token_noise_std=args.view_token_noise_std,
         attention_dropout=args.attention_dropout,
         projector_dropout=args.projector_dropout,
+        adapter_domain=args.adapter_domain,
+        view_mode=args.view_mode,
+        representation_mode=args.representation_mode,
     ).to(device).train()
   else:
     raise ValueError(f"Unknown fusion_mode: {args.fusion_mode}")
@@ -2057,11 +2874,24 @@ def main() -> None:
       lr=args.lr,
       weight_decay=args.weight_decay,
   )
-  scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
+  amp_dtype = (
+      torch.bfloat16 if args.amp_dtype == "bfloat16" else torch.float16)
+  scaler = torch.amp.GradScaler(
+      "cuda",
+      enabled=(
+          args.amp
+          and device.type == "cuda"
+          and amp_dtype == torch.float16
+      ),
+  )
 
   use_prefetch = args.prefetch_batches == 1
   uniform_views_per_group = (
       args.num_multi_view if args.camera_matched_pairing else None)
+  control_objectives_enabled = (
+      args.lambda_control_gain > 0
+      or args.lambda_spatial_preserve > 0
+  )
   if use_prefetch and (
       args.fusion_mode != "attention_pool" or args.pixel_aug
   ):
@@ -2127,6 +2957,22 @@ def main() -> None:
         "images",
         "seconds",
         "cuda_mem_mb",
+        "adapter_grad_norm",
+        "head_grad_norm",
+        "loss_control_gain",
+        "loss_spatial_preserve",
+        "loss_control_weighted",
+        "loss_spatial_weighted",
+        "control_adapted_score",
+        "control_frozen_score",
+        "control_gain_gap",
+        "control_win_rate",
+        "spatial_relative_delta",
+        "spatial_violation_fraction",
+        "lambda_control_gain",
+        "control_gain_margin",
+        "lambda_spatial_preserve",
+        "spatial_preserve_tolerance",
     ])
     f.flush()
 
@@ -2147,8 +2993,7 @@ def main() -> None:
               args.pin_memory,
           )
         images = move_batch_tensor(images, device, args.pin_memory)
-        if uniform_views_per_group is None:
-          group_idx = group_idx.to(device, non_blocking=args.pin_memory)
+        group_idx = group_idx.to(device, non_blocking=args.pin_memory)
         aug_images = None
         aug_group_idx = None
         aug_camera_ids = None
@@ -2210,13 +3055,27 @@ def main() -> None:
         image_count += aug_images.shape[0]
 
       optimizer.zero_grad(set_to_none=True)
+      human_group_count = args.batch_episode_pairs * args.num_timestamps
       with torch.amp.autocast(
-          "cuda", enabled=args.amp and device.type == "cuda"):
+          "cuda",
+          enabled=args.amp and device.type == "cuda",
+          dtype=amp_dtype,
+      ):
         if args.fusion_mode == "fixed_slot":
           z_groups, _, z_subsets_aux = model(
-              images, group_idx, subset_idx, camera_ids, num_groups)
+              images,
+              group_idx,
+              subset_idx,
+              camera_ids,
+              num_groups,
+              human_group_count,
+          )
+          z_frozen_control = None
+          loss_spatial_preserve = images.new_zeros(())
+          spatial_relative_delta = images.new_zeros(())
+          spatial_violation_fraction = images.new_zeros(())
         else:
-          z_groups, z_aux_a, z_aux_b = model(
+          model_outputs = model(
               images,
               group_idx,
               camera_ids,
@@ -2230,11 +3089,47 @@ def main() -> None:
               feature_view_mask_prob=args.view_mask_prob,
               feature_view_mask_min_views=args.view_mask_min_views,
               uniform_views_per_group=uniform_views_per_group,
+              human_group_count=human_group_count,
+              return_controls=control_objectives_enabled,
+              spatial_preserve_tolerance=args.spatial_preserve_tolerance,
           )
+          if control_objectives_enabled:
+            (
+                z_groups,
+                z_aux_a,
+                z_aux_b,
+                z_frozen_control,
+                loss_spatial_preserve,
+                spatial_relative_delta,
+                spatial_violation_fraction,
+            ) = model_outputs
+          else:
+            z_groups, z_aux_a, z_aux_b = model_outputs
+            z_frozen_control = None
+            loss_spatial_preserve = images.new_zeros(())
+            spatial_relative_delta = images.new_zeros(())
+            spatial_violation_fraction = images.new_zeros(())
         z = z_groups.reshape(
             2 * args.batch_episode_pairs, args.num_timestamps, -1)
         h_seq = z[:args.batch_episode_pairs]
         r_seq = z[args.batch_episode_pairs:]
+        h_aux_a_seq = h_aux_b_seq = None
+        r_aux_a_seq = r_aux_b_seq = None
+        if args.fusion_mode == "attention_pool":
+          z_aux_a_seq = z_aux_a.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          z_aux_b_seq = z_aux_b.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          h_aux_a_seq = z_aux_a_seq[:args.batch_episode_pairs]
+          h_aux_b_seq = z_aux_b_seq[:args.batch_episode_pairs]
+          r_aux_a_seq = z_aux_a_seq[args.batch_episode_pairs:]
+          r_aux_b_seq = z_aux_b_seq[args.batch_episode_pairs:]
+        r_frozen_seq = None
+        if z_frozen_control is not None:
+          frozen_z = z_frozen_control.reshape(
+              2 * args.batch_episode_pairs, args.num_timestamps, -1)
+          r_frozen_seq = frozen_z[args.batch_episode_pairs:]
+        loss_control_gain = loss_softdtw = z_groups.new_zeros(())
         if args.softdtw_mode == "contrastive":
           loss_softdtw, metrics = compute_softdtw_contrastive(
               h_seq,
@@ -2262,16 +3157,37 @@ def main() -> None:
               huber_delta=args.tcc_huber_delta,
           )
         elif args.softdtw_mode == "soft_alignment":
-          loss_softdtw, metrics = compute_soft_alignment_paired(
-              h_seq,
-              r_seq,
-              temperature=args.soft_alignment_temperature,
-              epsilon=args.soft_alignment_epsilon,
-              rho=args.soft_alignment_rho,
-              sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
-              struct_lambda=args.soft_alignment_struct_lambda,
-              max_forward_step=args.soft_alignment_max_forward_step,
-          )
+          if args.lambda_control_gain > 0:
+            if r_frozen_seq is None:
+              raise RuntimeError(
+                  "Control-gain training requires frozen Robot embeddings.")
+            (
+                loss_softdtw,
+                metrics,
+                loss_control_gain,
+            ) = compute_controlled_soft_alignment_paired(
+                h_seq,
+                r_seq,
+                r_frozen_seq,
+                temperature=args.soft_alignment_temperature,
+                epsilon=args.soft_alignment_epsilon,
+                rho=args.soft_alignment_rho,
+                sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
+                struct_lambda=args.soft_alignment_struct_lambda,
+                max_forward_step=args.soft_alignment_max_forward_step,
+                margin=args.control_gain_margin,
+            )
+          else:
+            loss_softdtw, metrics = compute_soft_alignment_paired(
+                h_seq,
+                r_seq,
+                temperature=args.soft_alignment_temperature,
+                epsilon=args.soft_alignment_epsilon,
+                rho=args.soft_alignment_rho,
+                sinkhorn_iters=args.soft_alignment_sinkhorn_iters,
+                struct_lambda=args.soft_alignment_struct_lambda,
+                max_forward_step=args.soft_alignment_max_forward_step,
+            )
         else:
           raise ValueError(f"Unknown softdtw_mode: {args.softdtw_mode}")
         if args.fusion_mode == "fixed_slot":
@@ -2290,6 +3206,8 @@ def main() -> None:
                 args.mv_temperature,
                 args.mv_soft_temporal_alpha,
                 args.mv_soft_temporal_tau,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
             )
             loss_aux_r, aux_r = compute_soft_temporal_infonce(
                 r_sub[:, 0],
@@ -2299,24 +3217,32 @@ def main() -> None:
                 args.mv_temperature,
                 args.mv_soft_temporal_alpha,
                 args.mv_soft_temporal_tau,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
             )
           else:
             loss_aux_h, aux_h = compute_multiview_infonce(
-                h_sub[:, 0], h_sub[:, 1], args.mv_temperature)
+                h_sub[:, 0],
+                h_sub[:, 1],
+                args.mv_temperature,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
+            )
             loss_aux_r, aux_r = compute_multiview_infonce(
-                r_sub[:, 0], r_sub[:, 1], args.mv_temperature)
+                r_sub[:, 0],
+                r_sub[:, 1],
+                args.mv_temperature,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
+            )
         else:
-          z_aux_a = z_aux_a.reshape(
-              2 * args.batch_episode_pairs, args.num_timestamps, -1)
-          z_aux_b = z_aux_b.reshape(
-              2 * args.batch_episode_pairs, args.num_timestamps, -1)
-          h_aux_a = z_aux_a[:args.batch_episode_pairs].reshape(
+          h_aux_a = h_aux_a_seq.reshape(
               args.batch_episode_pairs * args.num_timestamps, -1)
-          h_aux_b = z_aux_b[:args.batch_episode_pairs].reshape(
+          h_aux_b = h_aux_b_seq.reshape(
               args.batch_episode_pairs * args.num_timestamps, -1)
-          r_aux_a = z_aux_a[args.batch_episode_pairs:].reshape(
+          r_aux_a = r_aux_a_seq.reshape(
               args.batch_episode_pairs * args.num_timestamps, -1)
-          r_aux_b = z_aux_b[args.batch_episode_pairs:].reshape(
+          r_aux_b = r_aux_b_seq.reshape(
               args.batch_episode_pairs * args.num_timestamps, -1)
           if args.mv_soft_temporal:
             loss_aux_h, aux_h = compute_soft_temporal_infonce(
@@ -2327,6 +3253,8 @@ def main() -> None:
                 args.mv_temperature,
                 args.mv_soft_temporal_alpha,
                 args.mv_soft_temporal_tau,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
             )
             loss_aux_r, aux_r = compute_soft_temporal_infonce(
                 r_aux_a,
@@ -2336,17 +3264,43 @@ def main() -> None:
                 args.mv_temperature,
                 args.mv_soft_temporal_alpha,
                 args.mv_soft_temporal_tau,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
             )
           else:
             loss_aux_h, aux_h = compute_multiview_infonce(
-                h_aux_a, h_aux_b, args.mv_temperature)
+                h_aux_a,
+                h_aux_b,
+                args.mv_temperature,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
+            )
             loss_aux_r, aux_r = compute_multiview_infonce(
-                r_aux_a, r_aux_b, args.mv_temperature)
+                r_aux_a,
+                r_aux_b,
+                args.mv_temperature,
+                args.aux_teacher_stop_grad,
+                args.aux_global_negatives,
+            )
         loss_aux = 0.5 * (loss_aux_h + loss_aux_r)
         loss_sa_weighted = args.lambda_sa * loss_softdtw
         loss_aux_weighted = args.lambda_mv * loss_aux
-        loss = loss_sa_weighted + loss_aux_weighted
+        loss_control_weighted = (
+            args.lambda_control_gain * loss_control_gain)
+        loss_spatial_weighted = (
+            args.lambda_spatial_preserve * loss_spatial_preserve)
+        loss = (
+            loss_sa_weighted
+            + loss_aux_weighted
+            + loss_control_weighted
+            + loss_spatial_weighted
+        )
       scaler.scale(loss).backward()
+      scaler.unscale_(optimizer)
+      adapter_grad_norm = named_gradient_norm(
+          raw_model, lambda name: ".late_adapter_" in name)
+      head_grad_norm = named_gradient_norm(
+          raw_model, lambda name: not name.startswith("backbone."))
       scaler.step(optimizer)
       scaler.update()
 
@@ -2354,37 +3308,130 @@ def main() -> None:
       mem_mb = (
           torch.cuda.max_memory_allocated(device) / 1024 / 1024
           if device.type == "cuda" else 0.0)
-      emb_std = z_groups.detach().float().std(dim=0).mean().item()
+      emb_std = z_groups.detach().float().std(dim=0).mean()
       align_loss = metrics.get("align_loss", loss_softdtw)
       struct_loss = metrics.get(
           "struct_loss", loss_softdtw.new_zeros(()))
+      control_adapted_score = metrics.get(
+          "control_adapted_score", loss_softdtw.new_zeros(()))
+      control_frozen_score = metrics.get(
+          "control_frozen_score", loss_softdtw.new_zeros(()))
+      control_gain_gap = metrics.get(
+          "control_gain_gap", loss_softdtw.new_zeros(()))
+      control_win_rate = metrics.get(
+          "control_win_rate", loss_softdtw.new_zeros(()))
+      (
+          log_loss,
+          log_softdtw,
+          log_aux,
+          log_aux_h,
+          log_aux_r,
+          log_align,
+          log_struct,
+          log_sa_weighted,
+          log_aux_weighted,
+          log_softdtw_top1,
+          log_softdtw_pos,
+          log_softdtw_off,
+          log_aux_top1_h,
+          log_aux_top1_r,
+          log_aux_diag_h,
+          log_aux_off_h,
+          log_aux_diag_r,
+          log_aux_off_r,
+          log_emb_std,
+          log_adapter_grad,
+          log_head_grad,
+          log_control_gain,
+          log_spatial_preserve,
+          log_control_weighted,
+          log_spatial_weighted,
+          log_control_adapted,
+          log_control_frozen,
+          log_control_gap,
+          log_control_win_rate,
+          log_spatial_relative_delta,
+          log_spatial_violation,
+      ) = distributed_mean_scalars(
+          [
+              loss,
+              loss_softdtw,
+              loss_aux,
+              loss_aux_h,
+              loss_aux_r,
+              align_loss,
+              struct_loss,
+              loss_sa_weighted,
+              loss_aux_weighted,
+              metrics["top1"],
+              metrics["pos_dist"],
+              metrics["off_dist"],
+              aux_h["top1"],
+              aux_r["top1"],
+              aux_h["diag"],
+              aux_h["off"],
+              aux_r["diag"],
+              aux_r["off"],
+              emb_std,
+              adapter_grad_norm,
+              head_grad_norm,
+              loss_control_gain,
+              loss_spatial_preserve,
+              loss_control_weighted,
+              loss_spatial_weighted,
+              control_adapted_score,
+              control_frozen_score,
+              control_gain_gap,
+              control_win_rate,
+              spatial_relative_delta,
+              spatial_violation_fraction,
+          ],
+          device,
+          distributed,
+      )
       row = [
           step,
-          f"{loss.item():.8f}",
-          f"{loss_softdtw.item():.8f}",
-          f"{loss_aux.item():.8f}",
-          f"{loss_aux_h.item():.8f}",
-          f"{loss_aux_r.item():.8f}",
-          f"{align_loss.item():.8f}",
-          f"{struct_loss.item():.8f}",
-          f"{loss_sa_weighted.item():.8f}",
-          f"{loss_aux_weighted.item():.8f}",
+          f"{log_loss:.8f}",
+          f"{log_softdtw:.8f}",
+          f"{log_aux:.8f}",
+          f"{log_aux_h:.8f}",
+          f"{log_aux_r:.8f}",
+          f"{log_align:.8f}",
+          f"{log_struct:.8f}",
+          f"{log_sa_weighted:.8f}",
+          f"{log_aux_weighted:.8f}",
           f"{args.lambda_sa:.8f}",
           f"{args.lambda_mv:.8f}",
-          f"{metrics['top1'].item():.6f}",
-          f"{metrics['pos_dist'].item():.8f}",
-          f"{metrics['off_dist'].item():.8f}",
-          f"{aux_h['top1'].item():.6f}",
-          f"{aux_r['top1'].item():.6f}",
-          f"{aux_h['diag'].item():.6f}",
-          f"{aux_h['off'].item():.6f}",
-          f"{aux_r['diag'].item():.6f}",
-          f"{aux_r['off'].item():.6f}",
-          f"{emb_std:.8f}",
+          f"{log_softdtw_top1:.6f}",
+          f"{log_softdtw_pos:.8f}",
+          f"{log_softdtw_off:.8f}",
+          f"{log_aux_top1_h:.6f}",
+          f"{log_aux_top1_r:.6f}",
+          f"{log_aux_diag_h:.6f}",
+          f"{log_aux_off_h:.6f}",
+          f"{log_aux_diag_r:.6f}",
+          f"{log_aux_off_r:.6f}",
+          f"{log_emb_std:.8f}",
           args.batch_episode_pairs,
           image_count,
           f"{seconds:.4f}",
           f"{mem_mb:.1f}",
+          f"{log_adapter_grad:.8f}",
+          f"{log_head_grad:.8f}",
+          f"{log_control_gain:.8f}",
+          f"{log_spatial_preserve:.8f}",
+          f"{log_control_weighted:.8f}",
+          f"{log_spatial_weighted:.8f}",
+          f"{log_control_adapted:.8f}",
+          f"{log_control_frozen:.8f}",
+          f"{log_control_gap:.8f}",
+          f"{log_control_win_rate:.6f}",
+          f"{log_spatial_relative_delta:.8f}",
+          f"{log_spatial_violation:.6f}",
+          f"{args.lambda_control_gain:.8f}",
+          f"{args.control_gain_margin:.8f}",
+          f"{args.lambda_spatial_preserve:.8f}",
+          f"{args.spatial_preserve_tolerance:.8f}",
       ]
       writer.writerow(row)
       if is_main and (step == 1 or step % args.log_every == 0):
@@ -2398,7 +3445,10 @@ def main() -> None:
             f"aux_diag_off_r={row[19]}/{row[20]} "
             f"emb_std={row[21]} episode_pairs={args.batch_episode_pairs} "
             f"imgs={image_count} "
-            f"mem={row[25]}MB sec={row[24]}",
+            f"mem={row[25]}MB sec={row[24]} "
+            f"grad_adapter/head={row[26]}/{row[27]} "
+            f"control={row[28]} gap/win={row[34]}/{row[35]} "
+            f"spatial={row[29]} rel_delta/viol={row[36]}/{row[37]}",
             flush=True,
         )
         f.flush()
@@ -2408,6 +3458,35 @@ def main() -> None:
             raw_model.backbone, "adapter_layout", None)
         if adapter_layout is not None:
           model_format["r3m_late_adapter_layout"] = adapter_layout
+          model_format["r3m_adapter_init"] = getattr(
+              raw_model.backbone, "adapter_init", None)
+        model_format.update({
+            "adapter_domain": args.adapter_domain,
+            "view_mode": args.view_mode,
+            "representation_mode": args.representation_mode,
+        })
+        if (
+            args.adapter_domain == "robot_only"
+            and args.representation_mode == "backbone_pooled"
+            and adapter_layout is not None
+        ):
+          if control_objectives_enabled:
+            model_format.update({
+                # The transferable backbone topology stays asymmetric v2;
+                # version the new training behavior independently.
+                "method3_format": "asymmetric_domains_v2",
+                "method3_objectives": "counterfactual_spatial_v1",
+                "control_gain": "shared_teacher_hinge",
+                "spatial_preservation":
+                    "same_robot_feature_map_relative_residual_hinge",
+                "lambda_control_gain": args.lambda_control_gain,
+                "control_gain_margin": args.control_gain_margin,
+                "lambda_spatial_preserve": args.lambda_spatial_preserve,
+                "spatial_preserve_tolerance":
+                    args.spatial_preserve_tolerance,
+            })
+          else:
+            model_format["method3_format"] = "asymmetric_domains_v2"
         torch.save(
             {
                 "step": step,

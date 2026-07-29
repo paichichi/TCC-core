@@ -4,7 +4,7 @@ set -euo pipefail
 RVT_ROOT=${RVT_ROOT:-/home/paichichi/projects/rvt-3d-policy-head-adaption}
 TCC_ROOT=${TCC_ROOT:-/home/paichichi/projects/TCC-core}
 TCC_PYTHON=${TCC_PYTHON:-/home/paichichi/miniconda3/envs/tcc-core/bin/python}
-CONDA_ENV=${CONDA_ENV:-hralign_py39}
+CONDA_ENV=${CONDA_ENV:-tcc-core}
 CONDA_EXE=${CONDA_EXE:-/home/paichichi/miniconda3/bin/conda}
 DEVICE=${DEVICE:-0}
 MVT_CFG=${MVT_CFG:-${RVT_ROOT}/rvt/mvt/configs/rvt2.yaml}
@@ -34,8 +34,8 @@ RESNET_RVT_CFG="${TCC_ROOT}/downstream/rvt2_lite/configs/method3_wsl_resnet_ln_8
 TCC_RUNS=(
   "method3_vit_8ts4v_sa1_mv01_i10k:${VIT_TCC_CFG}:1.0:0.1:vit"
   "method3_vit_8ts4v_sa05_mv01_i10k:${VIT_TCC_CFG}:0.5:0.1:vit"
-  "method3_resnet_8ts4v_sa1_mv01_i10k:${RESNET_TCC_CFG}:1.0:0.1:resnet"
-  "method3_resnet_8ts4v_sa05_mv01_i10k:${RESNET_TCC_CFG}:0.5:0.1:resnet"
+  "method3_resnet_asym_v2_8ts4v_sa1_mv01_i10k:${RESNET_TCC_CFG}:1.0:0.1:resnet"
+  "method3_resnet_asym_v2_8ts4v_sa05_mv01_i10k:${RESNET_TCC_CFG}:0.5:0.1:resnet"
 )
 
 TRAIN_TASKS=(
@@ -104,32 +104,27 @@ echo "TABLE=${TABLE}"
 convert_tcc_resnet_checkpoint() {
   local source_ckpt="$1"
   local target_ckpt="$2"
-  "${TCC_PYTHON}" - "$source_ckpt" "$target_ckpt" <<'PY'
-import sys
-from pathlib import Path
-import torch
+  local converter="${TCC_ROOT}/scripts/convert_tcc_r3m_to_rvt.py"
+  "${TCC_PYTHON}" "${converter}" convert \
+    "${source_ckpt}" "${target_ckpt}" --force
+  "${TCC_PYTHON}" "${converter}" validate \
+    "${target_ckpt}" --source "${source_ckpt}"
+}
 
-source = Path(sys.argv[1])
-target = Path(sys.argv[2])
-checkpoint = torch.load(source, map_location="cpu")
-state = checkpoint.get("model", checkpoint)
-converted = {}
-for key, value in state.items():
-    if key.startswith("backbone.convnet."):
-        converted[key.removeprefix("backbone.")] = value
-target.parent.mkdir(parents=True, exist_ok=True)
-torch.save(
-    {
-        "model": converted,
-        "source_checkpoint": str(source),
-        "stripped_prefix": "backbone.",
-    },
-    target,
-)
-print(f"converted {len(converted)} tensors: {source} -> {target}")
-if not converted:
-    raise SystemExit("No backbone.convnet tensors found.")
-PY
+require_rvt_transfer_contract() {
+  grep -Fq 'TCC_RVT_TRANSFER_FORMAT = "tcc_rvt_resnet_v1"' \
+    "${RVT_ROOT}/rvt/train.py"
+  grep -Fq 'R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"' \
+    "${RVT_ROOT}/rvt/mvt/resnet.py"
+}
+
+require_strict_load_log() {
+  local log_path="$1"
+  if ! grep -Fq "Strict TCC/RVT convnet load OK" "${log_path}"; then
+    echo "ERROR: RVT did not confirm the strict Method3 transfer load: ${log_path}" >&2
+    tail -100 "${log_path}" >&2 || true
+    exit 1
+  fi
 }
 
 RVT_RUNS=()
@@ -162,12 +157,8 @@ for item in "${TCC_RUNS[@]}"; do
 
   if [ "${backbone_type}" = "resnet" ]; then
     pretrain="${PRETRAIN_DIR}/${run}_rvt2_resnet_pretrain.pt"
-    if [ -s "${pretrain}" ]; then
-      echo "CONVERT ${run} SKIP existing ${pretrain}"
-    else
-      echo "CONVERT ${run} START $(date '+%F %T')"
-      convert_tcc_resnet_checkpoint "${ckpt}" "${pretrain}"
-    fi
+    echo "CONVERT+VALIDATE ${run} START $(date '+%F %T')"
+    convert_tcc_resnet_checkpoint "${ckpt}" "${pretrain}"
     rvt_cfg="${RESNET_RVT_CFG}"
   else
     pretrain="${ckpt}"
@@ -186,12 +177,16 @@ for item in "${RVT_RUNS[@]}"; do
   echo "  pretrain=${pretrain}"
 done
 
+require_rvt_transfer_contract
 cd "${RVT_ROOT}"
 for item in "${RVT_RUNS[@]}"; do
   IFS=: read -r run cfg pretrain <<< "${item}"
   out_dir="${RUN_ROOT}/${run}"
   if [ -s "${out_dir}/model_0.pth" ]; then
     echo "TRAIN ${run} SKIP existing ${out_dir}/model_0.pth $(date '+%F %T')"
+    if [[ "${run}" == *"resnet"* ]]; then
+      require_strict_load_log "${TRAIN_LOG_DIR}/${run}.log"
+    fi
     continue
   fi
 
@@ -203,6 +198,9 @@ for item in "${RVT_RUNS[@]}"; do
     --exp_cfg_opts "tasks ${TRAIN_TASKS_CSV} train_iterations ${RVT_TRAIN_ITERATIONS} pretrain ${pretrain} overwriter_log_dir ${out_dir}" \
     > "${TRAIN_LOG_DIR}/${run}.log" 2>&1
   echo "TRAIN ${run} DONE $(date '+%F %T')"
+  if [[ "${run}" == *"resnet"* ]]; then
+    require_strict_load_log "${TRAIN_LOG_DIR}/${run}.log"
+  fi
   grep -E "MVT_|ViTB16Backbone|Manually loading|matched keys|\\[Finish\\]|total_loss|trans_loss|nan|NaN|Traceback|RuntimeError" "${TRAIN_LOG_DIR}/${run}.log" | tail -80 || true
 done
 

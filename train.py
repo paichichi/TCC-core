@@ -54,7 +54,9 @@ def main() -> None:
     ]
   else:
     cmd = [
-        "torchrun",
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
         "--standalone",
         f"--nproc_per_node={len(devices)}",
         str(train_script),

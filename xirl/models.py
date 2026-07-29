@@ -8,6 +8,44 @@ from torchvision import models
 
 
 R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"
+R3M_ADAPTER_INIT_RELEASE = "release_zero_mapping"
+R3M_ADAPTER_INIT_TRAINABLE = "trainable_identity"
+
+
+def validate_r3m_adapter_layout(
+    model_format: dict,
+    allow_unversioned: bool,
+) -> None:
+  checkpoint_layout = model_format.get("r3m_late_adapter_layout")
+  if checkpoint_layout is None:
+    if allow_unversioned:
+      return
+    raise ValueError(
+        "Refusing an unversioned R3M adapter checkpoint: "
+        f"expected layout={R3M_LATE_ADAPTER_LAYOUT!r}.")
+  if checkpoint_layout != R3M_LATE_ADAPTER_LAYOUT:
+    raise ValueError(
+        "Refusing an incompatible R3M adapter checkpoint: "
+        f"expected layout={R3M_LATE_ADAPTER_LAYOUT!r}, "
+        f"got {checkpoint_layout!r}.")
+
+
+def validate_r3m_adapter_init(
+    model_format: dict,
+    expected_init: str,
+    allow_unversioned: bool,
+) -> None:
+  checkpoint_init = model_format.get("r3m_adapter_init")
+  if checkpoint_init is None:
+    if allow_unversioned:
+      return
+    raise ValueError(
+        "Refusing an R3M adapter checkpoint without initialization metadata: "
+        f"expected init={expected_init!r}.")
+  if checkpoint_init != expected_init:
+    raise ValueError(
+        "Refusing an R3M adapter checkpoint with incompatible initialization: "
+        f"expected init={expected_init!r}, got {checkpoint_init!r}.")
 
 
 def _unwrap_state_dict(checkpoint):
@@ -138,15 +176,22 @@ class ViTB16Backbone(nn.Module):
 
 
 class HRAlignLateAdapter(nn.Module):
-  """Exact late grouped 1x1 adapter from the official HR-Align source."""
+  """Late grouped 1x1 residual adapter used by HR-Align and Method 3."""
 
   def __init__(
       self,
       channels: int = 2048,
       hidden_channels: int = 512,
       groups: int = 8,
+      init_mode: str = R3M_ADAPTER_INIT_RELEASE,
   ):
     super().__init__()
+    if init_mode not in (
+        R3M_ADAPTER_INIT_RELEASE,
+        R3M_ADAPTER_INIT_TRAINABLE,
+    ):
+      raise ValueError(f"Unsupported R3M adapter init mode: {init_mode}")
+    self.init_mode = init_mode
     self.D_fc1 = nn.Conv2d(
         channels,
         hidden_channels,
@@ -166,10 +211,18 @@ class HRAlignLateAdapter(nn.Module):
     )
     self.act = nn.ReLU()
 
-    nn.init.zeros_(self.D_mapping.weight)
-    nn.init.zeros_(self.D_mapping.bias)
     nn.init.zeros_(self.D_fc1.bias)
+    nn.init.zeros_(self.D_mapping.bias)
     nn.init.zeros_(self.D_fc2.bias)
+    if init_mode == R3M_ADAPTER_INIT_RELEASE:
+      # Compatibility with the released HR-Align implementation/checkpoint.
+      # ReLU at the all-zero mapping makes this initialization unsuitable for
+      # training a fresh adapter, but it must remain available for baselines.
+      nn.init.zeros_(self.D_mapping.weight)
+    else:
+      # A zero final projection makes the residual branch exactly zero while
+      # preserving a live gradient path into the branch after the first step.
+      nn.init.zeros_(self.D_fc2.weight)
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
     residual = self.act(self.D_fc1(x))
@@ -198,14 +251,19 @@ class HRAlignR3MBackbone(nn.Module):
       train_norm_affine: bool = True,
       train_adapters: bool = False,
       frozen_bn_stats: bool = True,
+      adapter_init: str = R3M_ADAPTER_INIT_RELEASE,
+      allow_unversioned_adapter_checkpoint: bool = False,
   ):
     super().__init__()
     self.frozen_bn_stats = frozen_bn_stats
+    self.adapter_init = adapter_init
+    self.allow_unversioned_adapter_checkpoint = (
+        allow_unversioned_adapter_checkpoint)
     self.convnet = models.resnet50(weights=None)
     self.convnet.fc = nn.Identity()
-    self.convnet.late_adapter_1 = HRAlignLateAdapter()
-    self.convnet.late_adapter_2 = HRAlignLateAdapter()
-    self.convnet.late_adapter_3 = HRAlignLateAdapter()
+    self.convnet.late_adapter_1 = HRAlignLateAdapter(init_mode=adapter_init)
+    self.convnet.late_adapter_2 = HRAlignLateAdapter(init_mode=adapter_init)
+    self.convnet.late_adapter_3 = HRAlignLateAdapter(init_mode=adapter_init)
 
     if pretrain_path:
       self.load_pretrained(pretrain_path)
@@ -255,26 +313,83 @@ class HRAlignR3MBackbone(nn.Module):
       source_state = _unwrap_state_dict(checkpoint)
 
     target_state = self.state_dict()
+    adapter_keys = {
+        key for key in target_state if ".late_adapter_" in key
+    }
     mapped_state = {}
     skipped = []
+    shape_mismatches = []
     for key, value in source_state.items():
       candidates = [
           key,
           key.removeprefix("module."),
+          key.removeprefix("backbone."),
+          key.removeprefix("module.backbone."),
           key.removeprefix("module.convnet."),
+          key.removeprefix("backbone.convnet."),
+          key.removeprefix("module.backbone.convnet."),
           f"convnet.{key}",
           f"convnet.{key.removeprefix('module.convnet.')}",
+          f"convnet.{key.removeprefix('backbone.convnet.')}",
+          f"convnet.{key.removeprefix('module.backbone.convnet.')}",
       ]
       mapped_key = next(
           (candidate for candidate in candidates if candidate in target_state),
           None,
       )
-      if mapped_key in target_state and target_state[mapped_key].shape == value.shape:
+      if (
+          mapped_key in target_state
+          and isinstance(value, torch.Tensor)
+          and target_state[mapped_key].shape == value.shape
+      ):
         mapped_state[mapped_key] = value
+      elif mapped_key in target_state and isinstance(value, torch.Tensor):
+        shape_mismatches.append(
+            (mapped_key, tuple(value.shape), tuple(target_state[mapped_key].shape)))
       else:
         skipped.append(key)
 
+    if shape_mismatches:
+      raise ValueError(
+          "R3M checkpoint tensor shape mismatch (first 10): "
+          f"{shape_mismatches[:10]}")
+    loaded_keys = set(mapped_state)
+    loaded_adapter_keys = loaded_keys & adapter_keys
+    missing_keys = set(target_state) - loaded_keys
+    if loaded_adapter_keys:
+      if loaded_adapter_keys != adapter_keys:
+        missing_adapters = sorted(adapter_keys - loaded_adapter_keys)
+        raise ValueError(
+            "R3M checkpoint contains an incomplete adapter: "
+            f"missing={missing_adapters}")
+      model_format = (
+          checkpoint.get("model_format", {})
+          if isinstance(checkpoint, dict) else {})
+      validate_r3m_adapter_layout(
+          model_format,
+          allow_unversioned=self.allow_unversioned_adapter_checkpoint,
+      )
+      validate_r3m_adapter_init(
+          model_format,
+          expected_init=self.adapter_init,
+          allow_unversioned=self.allow_unversioned_adapter_checkpoint,
+      )
+      if missing_keys:
+        raise ValueError(
+            "R3M adapted checkpoint is missing backbone tensors: "
+            f"{sorted(missing_keys)[:20]}")
+    elif missing_keys != adapter_keys:
+      missing_base = sorted(missing_keys - adapter_keys)
+      raise ValueError(
+          "R3M base checkpoint did not initialize the complete ResNet50: "
+          f"missing={missing_base[:20]}")
+
     missing, unexpected = self.load_state_dict(mapped_state, strict=False)
+    expected_missing = sorted(adapter_keys if not loaded_adapter_keys else ())
+    if sorted(missing) != expected_missing or unexpected:
+      raise RuntimeError(
+          "Unexpected R3M load result: "
+          f"missing={missing}, unexpected={unexpected}")
     print(
         "HRAlignR3MBackbone loaded "
         f"{len(mapped_state)} tensors from {checkpoint_path}; "
@@ -285,7 +400,8 @@ class HRAlignR3MBackbone(nn.Module):
     if skipped:
       print(f"HRAlignR3MBackbone skipped source keys (first 20): {skipped[:20]}")
 
-  def forward(self, images: torch.Tensor) -> torch.Tensor:
+  def forward_base(self, images: torch.Tensor) -> torch.Tensor:
+    """Encode images through the frozen ResNet, stopping after layer4."""
     x = self.convnet.conv1(images)
     x = self.convnet.bn1(x)
     x = self.convnet.relu(x)
@@ -295,12 +411,25 @@ class HRAlignR3MBackbone(nn.Module):
     x = self.convnet.layer2(x)
     x = self.convnet.layer3(x)
     x = self.convnet.layer4(x)
+    return x
+
+  def apply_adapters(self, features: torch.Tensor) -> torch.Tensor:
+    """Apply the three sequential post-layer4 residual adapters."""
+    x = features
     x = self.convnet.late_adapter_1(x)
     x = self.convnet.late_adapter_2(x)
     x = self.convnet.late_adapter_3(x)
+    return x
 
-    x = self.convnet.avgpool(x)
-    return torch.flatten(x, 1)
+  def pool_features(self, features: torch.Tensor) -> torch.Tensor:
+    return torch.flatten(self.convnet.avgpool(features), 1)
+
+  def forward_unadapted(self, images: torch.Tensor) -> torch.Tensor:
+    return self.pool_features(self.forward_base(images))
+
+  def forward(self, images: torch.Tensor) -> torch.Tensor:
+    features = self.forward_base(images)
+    return self.pool_features(self.apply_adapters(features))
 
 
 class R3MResNet50Backbone(nn.Module):
@@ -419,6 +548,8 @@ def build_backbone(
         train_norm_affine=train_norm_affine,
         train_adapters=train_adapters,
         frozen_bn_stats=True,
+        adapter_init=R3M_ADAPTER_INIT_RELEASE,
+        allow_unversioned_adapter_checkpoint=True,
     )
   if backbone in ("r3m_late_adapter", "r3m_adapter", "r3m_hralign_style"):
     return HRAlignR3MBackbone(
@@ -426,6 +557,8 @@ def build_backbone(
         train_norm_affine=train_norm_affine,
         train_adapters=train_adapters,
         frozen_bn_stats=True,
+        adapter_init=R3M_ADAPTER_INIT_TRAINABLE,
+        allow_unversioned_adapter_checkpoint=False,
     )
   if backbone in ("r3m_resnet50", "r3m", "unadapted_r3m"):
     if train_adapters:

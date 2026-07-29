@@ -2,12 +2,24 @@
 
 RH20T multi-view pretraining code.
 
-The current training objective is not vanilla TCC. It uses:
+The current Method 3 v2 objective is not vanilla TCC. It uses:
 
 - timestamp-aligned multi-view fusion
 - camera-matched H/R pairing
-- Human/Robot sequence-level contrastive Soft-DTW
-- same-side multi-view VVCL auxiliary loss
+- paired Human/Robot Soft Alignment
+- Human through frozen R3M and Robot through the same R3M plus Adapter
+- same-side augmentation CL (single view) or full/subset CL (multi-view)
+
+The transferable path is deliberately constrained:
+
+- only Robot features pass through the three post-layer4 Adapters
+- the R3M base and BatchNorm affine/statistics are frozen
+- Soft Alignment acts on the pooled backbone/Adapter representation
+- a single small shared projection head is used only for auxiliary CL
+- the canonical/full branch is a stop-gradient teacher
+
+Single view explicitly bypasses attention pooling. Multi-view uses attention
+pooling, and its main positive pair differs only by the available camera set.
 
 ## 1. Environment
 
@@ -46,6 +58,12 @@ Install project dependencies:
 ```bash
 pip install numpy pillow pyyaml
 pip install -e . --no-deps
+```
+
+For development and smoke tests:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 Check the environment:
@@ -92,8 +110,9 @@ python scripts/build_universal_matched_group_index.py \
 Main config files:
 
 ```text
-configs/debug_4080s.yaml
-configs/train_2a100.yaml
+configs/linux_method3_resnet_single_8ts1v.yaml
+configs/wsl_lite_method3_resnet_ln_8ts4v.yaml
+configs/nesi_method3_resnet_ln_8ts4v.yaml
 ```
 
 When moving to a new server, update these paths:
@@ -114,6 +133,12 @@ num_multi_view: 4
 lr: 0.000075
 max_iters: 20000
 lambda_mv: 0.5  # If MV-VVCL dominates, try 0.1 first.
+adapter_domain: robot_only
+representation_mode: backbone_pooled
+train_backbone_norm_affine: false
+aux_teacher_stop_grad: true
+aux_global_negatives: true
+amp_dtype: bfloat16
 ```
 
 `batch_episode_pairs` is per GPU/process. With 2 GPUs, total processed H/R episode pairs per step is roughly `batch_episode_pairs * 2`.
@@ -132,13 +157,20 @@ Fast smoke test:
 
 ```bash
 python train.py \
-  --exp_cfg_path configs/debug_4080s.yaml \
+  --exp_cfg_path configs/wsl_lite_method3_resnet_ln_8ts4v.yaml \
   --device 0 \
   -- \
-  --batch-episode-pairs 2 \
+  --out-dir /tmp/tcc-method3-smoke \
+  --batch-episode-pairs 1 \
+  --num-timestamps 2 \
+  --num-multi-view 2 \
+  --view-mask-min-views 1 \
+  --image-size 64 \
+  --prefetch-batches 0 \
+  --no-pin-memory \
   --max-iters 1 \
   --log-every 1 \
-  --save-every 0
+  --save-every 1
 ```
 
 ## 5. Multi-GPU Training
@@ -208,11 +240,15 @@ args = ckpt["args"]
 
 For RVT transfer, the main object you need is `ckpt["model"]`.
 
-New R3M late-adapter checkpoints also contain:
+Method 3 v2 R3M checkpoints contain:
 
 ```python
 ckpt["model_format"]["r3m_late_adapter_layout"]
 # post_layer4_sequential_v1
+ckpt["model_format"]["r3m_adapter_init"]
+# trainable_identity
+ckpt["model_format"]["method3_format"]
+# asymmetric_domains_v2
 ```
 
 ResNet late-adapter checkpoints without this field use the legacy,
@@ -220,11 +256,31 @@ shape-compatible but computation-incompatible adapter placement. Retrain those
 upstream checkpoints before treating them as the release-compatible Method 3
 ResNet result. ViT checkpoints are unaffected.
 
+Never strip prefixes with an ad-hoc `strict=False` converter. Use the strict
+converter, which requires all 336 tensors (318 base + 18 Adapter), validates
+shape/finite values and metadata, records SHA256 digests, and writes atomically:
+
+```bash
+python scripts/convert_tcc_r3m_to_rvt.py convert \
+  /path/to/checkpoint_003000.pt \
+  /path/to/rvt_pretrain.pt
+
+python scripts/convert_tcc_r3m_to_rvt.py validate \
+  /path/to/rvt_pretrain.pt \
+  --source /path/to/checkpoint_003000.pt
+```
+
+The RVT checkout must include the matching strict loader in `rvt/train.py`
+and the topology declaration in `rvt/mvt/resnet.py`. The Method 3 runner
+scripts verify both files before training and require the training log to
+contain `Strict TCC/RVT convnet load OK`; a legacy partial load is rejected.
+
 ## 8. Core Files
 
 ```text
 train.py
 scripts/train_multiview_softdtw.py
+scripts/convert_tcc_r3m_to_rvt.py
 xirl/models.py
 xirl/losses.py
 configs/default.yaml
