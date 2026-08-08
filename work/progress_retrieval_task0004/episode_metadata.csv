@@ -1,0 +1,11 @@
+local_pair,episode_id,pair_id,cfg,embodiment,camera_id,camera_view,robot_sequence_id,human_sequence_id,robot_start_frame,human_start_frame,robot_num_frames,human_num_frames,robot_over_human_frame_ratio
+task_0004_pair_0001,495,task_0004_user_0001_scene_0001_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002730,002731,0,35,152,258,0.5891
+task_0004_pair_0002,496,task_0004_user_0001_scene_0002_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002746,002747,0,40,122,78,1.5641
+task_0004_pair_0003,497,task_0004_user_0001_scene_0003_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002762,002763,0,37,151,78,1.9359
+task_0004_pair_0004,498,task_0004_user_0001_scene_0004_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002778,002779,0,36,154,73,2.1096
+task_0004_pair_0005,499,task_0004_user_0001_scene_0005_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002794,002795,0,30,201,69,2.913
+task_0004_pair_0006,500,task_0004_user_0001_scene_0006_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002810,002811,0,19,149,50,2.98
+task_0004_pair_0007,501,task_0004_user_0001_scene_0007_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002826,002827,0,28,156,81,1.9259
+task_0004_pair_0008,502,task_0004_user_0001_scene_0008_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002842,002843,0,43,144,75,1.92
+task_0004_pair_0009,503,task_0004_user_0001_scene_0009_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002858,002859,0,40,140,70,2.0
+task_0004_pair_0010,504,task_0004_user_0001_scene_0010_cfg_0001,RH20T_cfg1,Flexiv,0,cam_035622060973,002874,002875,0,26,150,54,2.7778
