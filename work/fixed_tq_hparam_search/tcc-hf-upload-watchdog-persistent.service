@@ -1,0 +1,6 @@
+[Unit]
+Description=Monitor and resume the RH20T Hugging Face upload
+
+[Service]
+Type=oneshot
+ExecStart=/home/paichichi/data/rh20t_prd03_transfer_20260806/watch_hf_parallel_upload.sh

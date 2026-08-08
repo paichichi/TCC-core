@@ -2264,6 +2264,20 @@ def compute_soft_alignment_direction_details(
 
   loss_align_per_pair = -(
       teacher * pred_log_prob).sum(dim=2).mean(dim=1)
+  teacher_log_prob = teacher.clamp_min(1e-8).log()
+  teacher_entropy_per_pair = -(
+      teacher * teacher_log_prob).sum(dim=2).mean(dim=1)
+  alignment_kl_per_pair = (
+      teacher * (teacher_log_prob - pred_log_prob)
+  ).sum(dim=2).mean(dim=1)
+  pred_entropy_per_pair = -(
+      pred_prob * pred_log_prob).sum(dim=2).mean(dim=1)
+  temporal_prior = make_temporal_prior_cost(
+      source.shape[1], source.device, source.dtype)
+  teacher_expected_deviation_per_pair = (
+      teacher * temporal_prior[None]).sum(dim=2).mean(dim=1)
+  teacher_diag_mass_per_pair = teacher.diagonal(
+      dim1=1, dim2=2).mean(dim=1)
   transition_cost = make_progress_transition_cost(
       source.shape[1],
       max_forward_step,
@@ -2289,6 +2303,12 @@ def compute_soft_alignment_direction_details(
       "off_dist": off,
       "loss_align": loss_align,
       "loss_struct": loss_struct,
+      "teacher_entropy": teacher_entropy_per_pair.mean(),
+      "alignment_kl": alignment_kl_per_pair.mean(),
+      "pred_entropy": pred_entropy_per_pair.mean(),
+      "teacher_expected_deviation":
+          teacher_expected_deviation_per_pair.mean(),
+      "teacher_diag_mass": teacher_diag_mass_per_pair.mean(),
       "pre_norm_min": torch.minimum(
           source_norm.min(), target_norm.min()),
       "pre_norm_mean": 0.5 * (
@@ -2380,6 +2400,18 @@ def compute_soft_alignment_paired(
           metrics_hr["loss_align"] + metrics_rh["loss_align"]),
       "struct_loss": 0.5 * (
           metrics_hr["loss_struct"] + metrics_rh["loss_struct"]),
+      "teacher_entropy": 0.5 * (
+          metrics_hr["teacher_entropy"] + metrics_rh["teacher_entropy"]),
+      "alignment_kl": 0.5 * (
+          metrics_hr["alignment_kl"] + metrics_rh["alignment_kl"]),
+      "pred_entropy": 0.5 * (
+          metrics_hr["pred_entropy"] + metrics_rh["pred_entropy"]),
+      "teacher_expected_deviation": 0.5 * (
+          metrics_hr["teacher_expected_deviation"]
+          + metrics_rh["teacher_expected_deviation"]),
+      "teacher_diag_mass": 0.5 * (
+          metrics_hr["teacher_diag_mass"]
+          + metrics_rh["teacher_diag_mass"]),
       "pre_norm_min": torch.minimum(
           metrics_hr["pre_norm_min"], metrics_rh["pre_norm_min"]),
       "pre_norm_mean": 0.5 * (
@@ -3340,6 +3372,11 @@ def main() -> None:
           "spatial_preserve_tolerance",
           "soft_alignment_pre_norm_min",
           "soft_alignment_pre_norm_mean",
+          "soft_alignment_teacher_entropy",
+          "soft_alignment_kl",
+          "soft_alignment_pred_entropy",
+          "soft_alignment_teacher_expected_deviation",
+          "soft_alignment_teacher_diag_mass",
       ])
     f.flush()
 
@@ -3716,6 +3753,16 @@ def main() -> None:
           "pre_norm_min", loss_softdtw.new_zeros(()))
       soft_alignment_pre_norm_mean = metrics.get(
           "pre_norm_mean", loss_softdtw.new_zeros(()))
+      soft_alignment_teacher_entropy = metrics.get(
+          "teacher_entropy", loss_softdtw.new_zeros(()))
+      soft_alignment_kl = metrics.get(
+          "alignment_kl", loss_softdtw.new_zeros(()))
+      soft_alignment_pred_entropy = metrics.get(
+          "pred_entropy", loss_softdtw.new_zeros(()))
+      soft_alignment_teacher_expected_deviation = metrics.get(
+          "teacher_expected_deviation", loss_softdtw.new_zeros(()))
+      soft_alignment_teacher_diag_mass = metrics.get(
+          "teacher_diag_mass", loss_softdtw.new_zeros(()))
       (
           log_loss,
           log_softdtw,
@@ -3755,6 +3802,11 @@ def main() -> None:
           log_spatial_violation,
           log_soft_alignment_pre_norm_min,
           log_soft_alignment_pre_norm_mean,
+          log_soft_alignment_teacher_entropy,
+          log_soft_alignment_kl,
+          log_soft_alignment_pred_entropy,
+          log_soft_alignment_teacher_expected_deviation,
+          log_soft_alignment_teacher_diag_mass,
       ) = distributed_mean_scalars(
           [
               loss,
@@ -3795,6 +3847,11 @@ def main() -> None:
               spatial_violation_fraction,
               soft_alignment_pre_norm_min,
               soft_alignment_pre_norm_mean,
+              soft_alignment_teacher_entropy,
+              soft_alignment_kl,
+              soft_alignment_pred_entropy,
+              soft_alignment_teacher_expected_deviation,
+              soft_alignment_teacher_diag_mass,
           ],
           device,
           distributed,
@@ -3849,6 +3906,11 @@ def main() -> None:
           f"{args.spatial_preserve_tolerance:.8f}",
           f"{log_soft_alignment_pre_norm_min:.8f}",
           f"{log_soft_alignment_pre_norm_mean:.8f}",
+          f"{log_soft_alignment_teacher_entropy:.8f}",
+          f"{log_soft_alignment_kl:.8f}",
+          f"{log_soft_alignment_pred_entropy:.8f}",
+          f"{log_soft_alignment_teacher_expected_deviation:.8f}",
+          f"{log_soft_alignment_teacher_diag_mass:.8f}",
       ]
       writer.writerow(row)
       if is_main and (step == 1 or step % args.log_every == 0):
@@ -3870,6 +3932,11 @@ def main() -> None:
             f"pre_norm_min/mean="
             f"{log_soft_alignment_pre_norm_min:.6f}/"
             f"{log_soft_alignment_pre_norm_mean:.6f} "
+            f"teacher_H/KL={log_soft_alignment_teacher_entropy:.6f}/"
+            f"{log_soft_alignment_kl:.6f} "
+            f"teacher_dev/diag="
+            f"{log_soft_alignment_teacher_expected_deviation:.6f}/"
+            f"{log_soft_alignment_teacher_diag_mass:.6f} "
             f"spatial={row[29]} rel_delta/viol={row[41]}/{row[42]}",
             flush=True,
         )

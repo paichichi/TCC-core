@@ -9,8 +9,9 @@ CONDA_EXE=${CONDA_EXE:-/home/paichichi/miniconda3/bin/conda}
 DEVICE=${DEVICE:-0}
 MVT_CFG=${MVT_CFG:-${RVT_ROOT}/rvt/mvt/configs/rvt2.yaml}
 TRAIN_ITERATIONS=${TRAIN_ITERATIONS:-25000}
-EPISODES=${EPISODES:-0,1,2,3,4,5,6,7,8,9}
+EPISODES_PER_REPEAT=${EPISODES_PER_REPEAT:-10}
 REPEATS=${REPEATS:-3}
+SUITE=${SUITE:-six}
 
 STAMP=${STAMP:-resnet_25k_$(date +%Y%m%d_%H%M%S)}
 BASE="${TCC_ROOT}/wsl_result/downstream_rvt2_lite_runs"
@@ -39,6 +40,23 @@ RVT_RUNS=(
   "method1_wsl_resnet_ln_8ts3v:${TCC_ROOT}/downstream/rvt2_lite/configs/method1_wsl_resnet_ln_8ts3v.yaml:${PRETRAIN_DIR}/wsl_lite_method1_resnet_ln_8ts3v_b4_i3000_rvt2_resnet_pretrain.pt"
   "method1_wsl_resnet_ln_8ts4v:${TCC_ROOT}/downstream/rvt2_lite/configs/method1_wsl_resnet_ln_8ts4v.yaml:${PRETRAIN_DIR}/wsl_lite_method1_resnet_ln_8ts4v_b4_i3000_rvt2_resnet_pretrain.pt"
 )
+
+if [[ "${SUITE}" == "8ts1v_three" ]]; then
+  TCC_RUNS=(
+    "four_branch_control_single_40k:${TCC_ROOT}/wsl_result/tcc_core_runs/linux_method3_resnet_four_branch_tc_single_8ts1v_b24_seed1_i40000_from25000/checkpoint_040000.pt:${PRETRAIN_DIR}/linux_method3_resnet_four_branch_tc_single_8ts1v_b24_seed1_i40000_rvt2_resnet_pretrain.pt"
+    "four_branch_control_spatial_single_40k:${TCC_ROOT}/wsl_result/tcc_core_runs/linux_method3_resnet_four_branch_tc_spatial_single_8ts1v_b24_seed1_i40000/checkpoint_040000.pt:${PRETRAIN_DIR}/linux_method3_resnet_four_branch_tc_spatial_single_8ts1v_b24_seed1_i40000_rvt2_resnet_pretrain.pt"
+    "bn_affine_two_branch_single_40k:${TCC_ROOT}/wsl_result/tcc_core_runs/linux_method3_resnet_bn_affine_two_branch_single_8ts1v_b20_seed1_i40000/checkpoint_040000.pt:${PRETRAIN_DIR}/linux_method3_resnet_bn_affine_two_branch_single_8ts1v_b20_seed1_i40000_rvt2_resnet_pretrain.pt"
+  )
+
+  RVT_RUNS=(
+    "four_branch_control_single_40k:${TCC_ROOT}/downstream/rvt2_lite/configs/adapted_r3m.yaml:${PRETRAIN_DIR}/linux_method3_resnet_four_branch_tc_single_8ts1v_b24_seed1_i40000_rvt2_resnet_pretrain.pt"
+    "four_branch_control_spatial_single_40k:${TCC_ROOT}/downstream/rvt2_lite/configs/adapted_r3m.yaml:${PRETRAIN_DIR}/linux_method3_resnet_four_branch_tc_spatial_single_8ts1v_b24_seed1_i40000_rvt2_resnet_pretrain.pt"
+    "bn_affine_two_branch_single_40k:${TCC_ROOT}/downstream/rvt2_lite/configs/unadapted_r3m.yaml:${PRETRAIN_DIR}/linux_method3_resnet_bn_affine_two_branch_single_8ts1v_b20_seed1_i40000_rvt2_resnet_pretrain.pt"
+  )
+elif [[ "${SUITE}" != "six" ]]; then
+  echo "Unknown SUITE=${SUITE}; expected six or 8ts1v_three" >&2
+  exit 2
+fi
 
 TRAIN_TASKS=(
   close_jar
@@ -87,14 +105,16 @@ mkdir -p "${PRETRAIN_DIR}" "${RUN_ROOT}" "${TRAIN_LOG_DIR}" "${EVAL_LOG_DIR}"
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${RVT_ROOT}:${RVT_ROOT}/rvt:${RVT_ROOT}/rvt/libs/YARR:${RVT_ROOT}/rvt/libs/RLBench:${RVT_ROOT}/rvt/libs/PyRep:${RVT_ROOT}/rvt/libs/peract:${RVT_ROOT}/rvt/libs/peract_colab:${RVT_ROOT}/rvt/libs/point-renderer:${PYTHONPATH:-}"
 export COPPELIASIM_ROOT="${COPPELIASIM_ROOT:-/home/paichichi/software/CoppeliaSim_4_1_0}"
-export TORCH_LIB_DIR="${TORCH_LIB_DIR:-/home/paichichi/miniconda3/envs/${CONDA_ENV}/lib/python3.9/site-packages/torch/lib}"
-export CONDA_LIB_DIR="${CONDA_LIB_DIR:-/home/paichichi/miniconda3/envs/${CONDA_ENV}/lib}"
-export LD_LIBRARY_PATH="${TORCH_LIB_DIR}:${CONDA_LIB_DIR}:${COPPELIASIM_ROOT}:${COPPELIASIM_ROOT}/lib:${LD_LIBRARY_PATH:-}"
+export CONDA_PREFIX_PATH="${CONDA_PREFIX_PATH:-/home/paichichi/miniconda3/envs/${CONDA_ENV}}"
+export CONDA_LIB_DIR="${CONDA_LIB_DIR:-${CONDA_PREFIX_PATH}/lib}"
+export LD_LIBRARY_PATH="${CONDA_LIB_DIR}:${COPPELIASIM_ROOT}:${LD_LIBRARY_PATH:-}"
+export LD_PRELOAD="${COPPELIASIM_ROOT}/libcrypto.so.1.1:${COPPELIASIM_ROOT}/libssl.so.1.1"
 export QT_QPA_PLATFORM_PLUGIN_PATH="${COPPELIASIM_ROOT}"
-export QT_PLUGIN_PATH="${COPPELIASIM_ROOT}"
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+unset QT_PLUGIN_PATH
+unset QT_QPA_PLATFORM
 
 echo "STAMP=${STAMP}"
+echo "SUITE=${SUITE}"
 echo "TRAIN_ITERATIONS=${TRAIN_ITERATIONS}"
 echo "RUN_ROOT=${RUN_ROOT}"
 echo "TRAIN_LOG_DIR=${TRAIN_LOG_DIR}"
@@ -112,7 +132,7 @@ import torch
 
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
-checkpoint = torch.load(source, map_location="cpu")
+checkpoint = torch.load(source, map_location="cpu", weights_only=False)
 state = checkpoint.get("model", checkpoint)
 converted = {}
 for key, value in state.items():
@@ -181,23 +201,27 @@ done
 echo 'run,repeat,task,success_rate,length,total_transitions,status' > "${RAW}"
 
 for rep in $(seq 1 "${REPEATS}"); do
+  start_episode=0
   for item in "${RVT_RUNS[@]}"; do
     IFS=: read -r run _cfg _pretrain <<< "${item}"
     log_name="resnet_25k_${STAMP}_rep${rep}"
     outlog="${EVAL_LOG_DIR}/${run}_rep${rep}.log"
+    eval_result_dir="${RUN_ROOT}/${run}/eval/${log_name}"
+    rm -rf "${eval_result_dir}"
     echo "EVAL ${run} repeat=${rep} START $(date '+%F %T')"
-    if "${CONDA_EXE}" run --no-capture-output -n "${CONDA_ENV}" python -m rvt.eval \
+    if xvfb-run -a -e /dev/null \
+      -s "-screen 0 1024x768x24 +extension GLX +render -noreset" \
+      "${CONDA_PREFIX_PATH}/bin/python" -m rvt.eval \
       --model-folder "${RUN_ROOT}/${run}" \
       --model-name model_0.pth \
       --tasks "${EVAL_TASKS[@]}" \
       --eval-datafolder /home/paichichi/data/AGNOSTOS/unseen_tasks/test \
-      --eval-episode-list "${EPISODES}" \
+      --start-episode "${start_episode}" \
+      --eval-episodes "${EPISODES_PER_REPEAT}" \
       --episode-length 25 \
       --headless \
       --device "${DEVICE}" \
       --log-name "${log_name}" \
-      --no-tensorboard \
-      --no-env-shutdown \
       > "${outlog}" 2>&1; then
       csv="${RUN_ROOT}/${run}/eval/${log_name}/model_0/eval_results.csv"
       awk -F, -v run="${run}" -v rep="${rep}" 'NR>1 {gsub(/\r/,"",$4); print run","rep","$1","$2","$3","$4",ok"}' "${csv}" >> "${RAW}"

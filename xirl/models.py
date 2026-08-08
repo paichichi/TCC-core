@@ -4,12 +4,60 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import models
 
 
 R3M_LATE_ADAPTER_LAYOUT = "post_layer4_sequential_v1"
 R3M_ADAPTER_INIT_RELEASE = "release_zero_mapping"
 R3M_ADAPTER_INIT_TRAINABLE = "trainable_identity"
+
+
+class ReferenceAffineBatchNorm2d(nn.BatchNorm2d):
+  """BatchNorm with an immutable copy of its pretrained affine parameters."""
+
+  def __init__(self, source: nn.BatchNorm2d):
+    if not source.affine:
+      raise ValueError("BN-affine tuning requires affine BatchNorm layers.")
+    super().__init__(
+        source.num_features,
+        eps=source.eps,
+        momentum=source.momentum,
+        affine=True,
+        track_running_stats=source.track_running_stats,
+        device=source.weight.device,
+        dtype=source.weight.dtype,
+    )
+    self.load_state_dict(source.state_dict())
+    self.register_buffer(
+        "reference_weight", source.weight.detach().clone(), persistent=False)
+    self.register_buffer(
+        "reference_bias", source.bias.detach().clone(), persistent=False)
+    self.use_reference_affine = False
+
+  def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    weight = self.reference_weight if self.use_reference_affine else self.weight
+    bias = self.reference_bias if self.use_reference_affine else self.bias
+    return F.batch_norm(
+        inputs,
+        self.running_mean,
+        self.running_var,
+        weight,
+        bias,
+        training=False,
+        momentum=0.0,
+        eps=self.eps,
+    )
+
+
+def _install_reference_bn_affines(module: nn.Module) -> None:
+  for name, child in list(module.named_children()):
+    if isinstance(child, ReferenceAffineBatchNorm2d):
+      continue
+    if isinstance(child, nn.BatchNorm2d):
+      setattr(module, name, ReferenceAffineBatchNorm2d(child))
+    else:
+      _install_reference_bn_affines(child)
 
 
 def validate_r3m_adapter_layout(
@@ -433,7 +481,7 @@ class HRAlignR3MBackbone(nn.Module):
 
 
 class R3MResNet50Backbone(nn.Module):
-  """Original R3M ResNet50 visual backbone without HR-Align adapters."""
+  """Original R3M ResNet50 with controlled BN-affine tuning."""
 
   output_dim = 2048
 
@@ -450,6 +498,9 @@ class R3MResNet50Backbone(nn.Module):
 
     if pretrain_path:
       self.load_pretrained(pretrain_path)
+
+    # Preserve the exact R3M affine function for the frozen control paths.
+    _install_reference_bn_affines(self.convnet)
 
     for param in self.parameters():
       param.requires_grad = False
@@ -469,6 +520,38 @@ class R3MResNet50Backbone(nn.Module):
     for module in self.modules():
       if isinstance(module, nn.BatchNorm2d):
         module.eval()
+
+  def _set_reference_affine(self, enabled: bool) -> None:
+    for module in self.modules():
+      if isinstance(module, ReferenceAffineBatchNorm2d):
+        module.use_reference_affine = enabled
+
+  def _forward_feature_map(self, images: torch.Tensor) -> torch.Tensor:
+    x = self.convnet.conv1(images)
+    x = self.convnet.bn1(x)
+    x = self.convnet.relu(x)
+    x = self.convnet.maxpool(x)
+    x = self.convnet.layer1(x)
+    x = self.convnet.layer2(x)
+    x = self.convnet.layer3(x)
+    x = self.convnet.layer4(x)
+    return x
+
+  def forward_base(self, images: torch.Tensor) -> torch.Tensor:
+    """Run the immutable pretrained BN-affine reference path."""
+    self._set_reference_affine(True)
+    try:
+      return self._forward_feature_map(images)
+    finally:
+      self._set_reference_affine(False)
+
+  def forward_adapted(self, images: torch.Tensor) -> torch.Tensor:
+    """Run the trainable BN-affine path."""
+    self._set_reference_affine(False)
+    return self._forward_feature_map(images)
+
+  def pool_features(self, features: torch.Tensor) -> torch.Tensor:
+    return torch.flatten(self.convnet.avgpool(features), 1)
 
   def train(self, mode: bool = True):
     super().train(mode)
@@ -519,7 +602,7 @@ class R3MResNet50Backbone(nn.Module):
       print(f"R3MResNet50Backbone skipped source keys (first 20): {skipped[:20]}")
 
   def forward(self, images: torch.Tensor) -> torch.Tensor:
-    return self.convnet(images)
+    return self.pool_features(self.forward_adapted(images))
 
 
 def build_backbone(

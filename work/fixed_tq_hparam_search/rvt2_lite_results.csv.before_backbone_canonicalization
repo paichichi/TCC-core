@@ -1,0 +1,2 @@
+run_name,backbone,repeats,tasks_per_repeat,episodes_per_task,overall_mean,overall_std,level1_mean,level1_std,level2_mean,level2_std,raw_csv
+linux_method3_resnet_bn_affine_symmetric_two_branch_single_8ts1v_b20_seed1_i40000,r3m_bn,3,12,10,28.055556,1.571348,28.888889,3.424674,27.222222,2.078699,/home/paichichi/projects/TCC-core/wsl_result/downstream_rvt2_lite_runs/resnet_25k_bn_affine_symmetric_40k_25k_3x10_fair_restart_20260802.csv

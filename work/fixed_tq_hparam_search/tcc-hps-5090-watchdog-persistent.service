@@ -1,0 +1,6 @@
+[Unit]
+Description=Monitor and resume the managed RTX 5090 search
+
+[Service]
+Type=oneshot
+ExecStart=/home/paichichi/projects/TCC-core/work/fixed_tq_hparam_search/watch_5090_search.sh

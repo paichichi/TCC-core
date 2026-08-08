@@ -1,0 +1,3 @@
+run_name	backbone	rho	epsilon	lr
+hpsA_vit_imagenet_rho0p25_eps0p05_lr7p5e5_i40000	vit_imagenet	0.25	0.05	0.000075
+

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the managed RTX 5090 search watchdog every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=tcc-hps-5090-watchdog-persistent.service
+
+[Install]
+WantedBy=timers.target

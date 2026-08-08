@@ -1,0 +1,36 @@
+experiment: fixed_tq_hparam_search_20260806
+source_git_commit: 77ee28da4f0ef40a72f644a54781385485f2ee7f
+source_note: >
+  The source worktree contains uncommitted research changes. The hashes below,
+  rather than the Git commit alone, identify the executed implementation.
+
+source_sha256:
+  scripts/train_multiview_softdtw_hparam.py: 72166d1ec9bde225fb29f5ac134837ab22cbca0a2fca8fd498ea501ff435f3d6
+  xirl/models.py: 450d9895bf1c1bcb9642961c7d73bd4aab104fb1eb9bd99194b0f884a53f58a4
+  configs/linux_method3_vit_ln_single_8ts1v_b8_seed1_i40000.yaml: 6c53801ad6b4326b9e34a8a3efb834b2a8c241c27149b4243db84f1e8f825d08
+  configs/linux_method3_resnet_bn_affine_symmetric_two_branch_single_8ts1v_b20_seed1_i40000.yaml: e2637ecd27925c912224daae83c11ddf9c159e01c896e83b1f6319f90adb61ee
+  work/fixed_tq_hparam_search/select_stage_winners.py: 859c518991f300ad0bc44c864ba0f3b271203a105a9b75593ed2e35521474891
+  work/fixed_tq_hparam_search/SEARCH_PROTOCOL.md: 5be55f98f5da7027ae9bbd68ab523edd9990c785efc8e6a488cdd5383c23d6a8
+
+data:
+  training_index_sha256: ec280f12b7c64d70e011f5fc042fa35ac1b1d38a0715a22b43eff999f5d15e19
+  d4r_imagenet_sha256: 194b920f81d419c2d51f9ff133b712c0e17a8d54101ff854fcb40deacca40a80
+  unadapted_r3m_sha256: e20e86a39aac8dfe06118afca1cb71ee136c43be7cf84bfc65acab9e38bb6b2f
+
+software:
+  common:
+    torch: 2.8.0+cu128
+    torchvision: 0.23.0+cu128
+    numpy: 2.0.2
+  rtx_5090:
+    python: 3.9.23
+  h200:
+    python: 3.12.13
+
+comparison_policy:
+  - Treat each H200 backbone lane as its primary within-platform grid.
+  - Repeat anchor settings on H200 before interpreting 5090 candidates.
+  - Use 5090-only runs for screening until an H200 anchor confirms direction.
+  - Do not rank candidates using final upstream scalar loss alone.
+  - Apply the one-standard-error rule before changing a preregistered default.
+  - Do not consult the final 23-task evaluation while selecting candidates.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the RH20T upload watchdog every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=tcc-hf-upload-watchdog-persistent.service
+
+[Install]
+WantedBy=timers.target

@@ -7,6 +7,7 @@ import argparse
 import csv
 import itertools
 import json
+import math
 import os
 import random
 import sys
@@ -2170,50 +2171,113 @@ def make_temporal_prior_cost(num_timestamps, device, dtype):
   return _cached_temporal_prior_cost(num_timestamps, str(device), dtype)
 
 
-@lru_cache(maxsize=32)
-def _cached_progress_transition_cost(
-    num_timestamps,
-    max_forward_step,
-    device_str,
-    dtype,
-):
-  device = torch.device(device_str)
-  indices = torch.arange(num_timestamps, device=device, dtype=dtype)
-  delta = indices[None] - indices[:, None]
-  max_forward = max_forward_step / max(1, num_timestamps - 1)
-  delta = delta / max(1, num_timestamps - 1)
-  backward = F.relu(-delta)
-  large_forward = F.relu(delta - max_forward)
-  return backward.pow(2) + large_forward.pow(2)
+def make_uncertainty_adaptive_teacher(pred_prob, sinkhorn_iters, eps=1e-8):
+  """Fuse visual correspondence with a parameter-free progress prior.
 
+  The row-wise standard deviation of the detached visual prediction controls
+  the width of the temporal prior. Ambiguous predictions therefore receive a
+  broad prior, while confident predictions receive a narrower one. The
+  timestamp resolution supplies the only lower bound on the width.
+  """
+  if pred_prob.ndim != 3:
+    raise ValueError(
+        "Adaptive teacher expects [batch, source_time, target_time].")
+  num_source = pred_prob.shape[1]
+  num_target = pred_prob.shape[2]
+  source_progress = torch.linspace(
+      0.0, 1.0, num_source, device=pred_prob.device,
+      dtype=pred_prob.dtype)
+  target_progress = torch.linspace(
+      0.0, 1.0, num_target, device=pred_prob.device,
+      dtype=pred_prob.dtype)
 
-def make_progress_transition_cost(
-    num_timestamps,
-    max_forward_step,
-    device,
-    dtype,
-):
-  return _cached_progress_transition_cost(
-      num_timestamps,
-      max_forward_step,
-      str(device),
-      dtype,
+  visual_prob = pred_prob.detach()
+  predicted_mean = (
+      visual_prob * target_progress[None, None, :]).sum(
+          dim=2, keepdim=True)
+  predicted_variance = (
+      visual_prob
+      * (target_progress[None, None, :] - predicted_mean).square()
+  ).sum(dim=2, keepdim=True)
+  predicted_std = predicted_variance.clamp_min(0.0).sqrt()
+  timestamp_resolution = 1.0 / max(1, num_target - 1)
+  adaptive_width = predicted_std.clamp_min(timestamp_resolution)
+
+  progress_deviation = (
+      source_progress[None, :, None]
+      - target_progress[None, None, :]
   )
+  progress_prior = torch.exp(
+      -0.5 * progress_deviation.square() / adaptive_width.square())
+  kernel = (visual_prob * progress_prior).clamp_min(eps)
+  teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters, eps=eps)
+  return teacher, adaptive_width
 
 
-def compute_structural_progress_loss_per_pair(prob, transition_cost):
-  if prob.shape[1] <= 1:
-    return prob.new_zeros((prob.shape[0],))
+def make_jump_distribution(prob):
+  """Return backward mass and every non-negative jump-size probability."""
+  if prob.ndim != 3:
+    raise ValueError("Jump distribution expects [batch, time, match_time].")
   prev_prob = prob[:, :-1]
   next_prob = prob[:, 1:]
-  expected_cost = torch.einsum(
-      "bik,kl,bil->bi", prev_prob, transition_cost, next_prob)
-  return expected_cost.mean(dim=1)
+  joint = prev_prob.unsqueeze(-1) * next_prob.unsqueeze(-2)
+  num_matches = prob.shape[2]
+
+  forward = torch.stack([
+      joint.diagonal(offset=jump, dim1=-2, dim2=-1).sum(dim=-1)
+      for jump in range(num_matches)
+  ], dim=-1)
+  if num_matches > 1:
+    backward = torch.stack([
+        joint.diagonal(offset=-jump, dim1=-2, dim2=-1).sum(dim=-1)
+        for jump in range(1, num_matches)
+    ], dim=-1).sum(dim=-1, keepdim=True)
+  else:
+    backward = forward.new_zeros((*forward.shape[:-1], 1))
+  return torch.cat([backward, forward], dim=-1)
 
 
-def compute_structural_progress_loss(prob, transition_cost):
-  return compute_structural_progress_loss_per_pair(
-      prob, transition_cost).mean()
+def compute_adaptive_transition_loss_per_pair(
+    pred_prob,
+    teacher_prob,
+    eps=1e-8,
+):
+  """Match teacher-supported jump sizes without a fixed large-jump bound."""
+  if pred_prob.shape != teacher_prob.shape:
+    raise ValueError("Prediction and teacher transition shapes differ.")
+  if pred_prob.shape[1] <= 1:
+    return pred_prob.new_zeros((pred_prob.shape[0],)), pred_prob.new_zeros(())
+
+  pred_jump = make_jump_distribution(pred_prob)
+  with torch.no_grad():
+    teacher_jump_all = make_jump_distribution(teacher_prob.detach())
+    # The first category aggregates every backward transition. The monotonic
+    # task-progress prior assigns it zero target mass, while stay and every
+    # forward jump remain possible.
+    teacher_forward = teacher_jump_all[..., 1:]
+    teacher_forward = teacher_forward / teacher_forward.sum(
+        dim=-1, keepdim=True).clamp_min(eps)
+    teacher_jump = torch.cat(
+        [torch.zeros_like(teacher_jump_all[..., :1]), teacher_forward],
+        dim=-1,
+    )
+    entropy = -(
+        teacher_forward * teacher_forward.clamp_min(eps).log()
+    ).sum(dim=-1)
+    max_entropy = math.log(max(2, teacher_forward.shape[-1]))
+    confidence = (1.0 - entropy / max_entropy).clamp(0.0, 1.0)
+
+  transition_kl = (
+      teacher_jump
+      * (
+          teacher_jump.clamp_min(eps).log()
+          - pred_jump.clamp_min(eps).log()
+      )
+  ).sum(dim=-1)
+  weighted = (confidence * transition_kl).sum(dim=1)
+  confidence_sum = confidence.sum(dim=1)
+  loss_per_pair = weighted / confidence_sum.clamp_min(eps)
+  return loss_per_pair, confidence.mean()
 
 
 def compute_soft_alignment_direction_details(
@@ -2247,14 +2311,11 @@ def compute_soft_alignment_direction_details(
   pred_prob = pred_log_prob.exp()
 
   cost = 1.0 - similarity
+  adaptive_width = None
   if teacher is None:
-    temporal_prior = make_temporal_prior_cost(
-        source.shape[1], source.device, source.dtype)
-    teacher_cost = (
-        teacher_feature_weight * cost + rho * temporal_prior[None])
     with torch.no_grad():
-      kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
-      teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
+      teacher, adaptive_width = make_uncertainty_adaptive_teacher(
+          pred_prob, sinkhorn_iters)
   else:
     if teacher.shape != pred_log_prob.shape:
       raise ValueError(
@@ -2264,14 +2325,8 @@ def compute_soft_alignment_direction_details(
 
   loss_align_per_pair = -(
       teacher * pred_log_prob).sum(dim=2).mean(dim=1)
-  transition_cost = make_progress_transition_cost(
-      source.shape[1],
-      max_forward_step,
-      source.device,
-      source.dtype,
-  )
-  loss_struct_per_pair = compute_structural_progress_loss_per_pair(
-      pred_prob, transition_cost)
+  loss_struct_per_pair, transition_confidence = (
+      compute_adaptive_transition_loss_per_pair(pred_prob, teacher))
   loss_per_pair = (
       loss_align_per_pair + struct_lambda * loss_struct_per_pair)
   loss_align = loss_align_per_pair.mean()
@@ -2289,11 +2344,19 @@ def compute_soft_alignment_direction_details(
       "off_dist": off,
       "loss_align": loss_align,
       "loss_struct": loss_struct,
+      "adaptive_transition_confidence": transition_confidence,
       "pre_norm_min": torch.minimum(
           source_norm.min(), target_norm.min()),
       "pre_norm_mean": 0.5 * (
           source_norm.mean() + target_norm.mean()),
   }
+  if adaptive_width is not None:
+    teacher_entropy = -(
+        teacher * teacher.clamp_min(1e-8).log()).sum(dim=2).mean()
+    metrics.update({
+        "adaptive_teacher_width": adaptive_width.mean(),
+        "adaptive_teacher_entropy": teacher_entropy,
+    })
   return loss, metrics, teacher.detach(), loss_per_pair
 
 

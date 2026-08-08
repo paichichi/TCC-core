@@ -1779,25 +1779,26 @@ def make_transform(image_size: int):
   ])
 
 
-def make_weak_aug_transform(image_size: int):
+def make_strong_photometric_aug_transform(image_size: int):
+  """Stronger appearance augmentation without changing task geometry."""
   return transforms.Compose([
       transforms.Resize((image_size, image_size), antialias=True),
       transforms.ColorJitter(
-          brightness=0.2,
-          contrast=0.2,
-          saturation=0.2,
-          hue=0.05,
+          brightness=0.4,
+          contrast=0.4,
+          saturation=0.4,
+          hue=0.1,
       ),
-      transforms.RandomGrayscale(p=0.1),
+      transforms.RandomGrayscale(p=0.2),
       transforms.RandomApply([
-          transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
-      ], p=0.1),
+          transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+      ], p=0.3),
       transforms.ToTensor(),
       transforms.Normalize(
           mean=(0.485, 0.456, 0.406),
           std=(0.229, 0.224, 0.225),
       ),
-      transforms.RandomErasing(p=0.05, scale=(0.02, 0.08), value=0.0),
+      transforms.RandomErasing(p=0.15, scale=(0.02, 0.15), value=0.0),
   ])
 
 
@@ -3082,7 +3083,7 @@ def main() -> None:
 
   transform = make_transform(args.image_size)
   aug_transform = (
-      make_weak_aug_transform(args.image_size)
+      make_strong_photometric_aug_transform(args.image_size)
       if args.pixel_aug else transform
   )
   if args.fusion_mode == "fixed_slot":

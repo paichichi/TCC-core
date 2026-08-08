@@ -2170,6 +2170,49 @@ def make_temporal_prior_cost(num_timestamps, device, dtype):
   return _cached_temporal_prior_cost(num_timestamps, str(device), dtype)
 
 
+def make_uncertainty_adaptive_teacher(pred_prob, sinkhorn_iters, eps=1e-8):
+  """Fuse visual correspondence with a parameter-free progress prior.
+
+  The row-wise standard deviation of the detached visual prediction controls
+  the width of the temporal prior. Ambiguous predictions therefore receive a
+  broad prior, while confident predictions receive a narrower one. The
+  timestamp resolution supplies the only lower bound on the width.
+  """
+  if pred_prob.ndim != 3:
+    raise ValueError(
+        "Adaptive teacher expects [batch, source_time, target_time].")
+  num_source = pred_prob.shape[1]
+  num_target = pred_prob.shape[2]
+  source_progress = torch.linspace(
+      0.0, 1.0, num_source, device=pred_prob.device,
+      dtype=pred_prob.dtype)
+  target_progress = torch.linspace(
+      0.0, 1.0, num_target, device=pred_prob.device,
+      dtype=pred_prob.dtype)
+
+  visual_prob = pred_prob.detach()
+  predicted_mean = (
+      visual_prob * target_progress[None, None, :]).sum(
+          dim=2, keepdim=True)
+  predicted_variance = (
+      visual_prob
+      * (target_progress[None, None, :] - predicted_mean).square()
+  ).sum(dim=2, keepdim=True)
+  predicted_std = predicted_variance.clamp_min(0.0).sqrt()
+  timestamp_resolution = 1.0 / max(1, num_target - 1)
+  adaptive_width = predicted_std.clamp_min(timestamp_resolution)
+
+  progress_deviation = (
+      source_progress[None, :, None]
+      - target_progress[None, None, :]
+  )
+  progress_prior = torch.exp(
+      -0.5 * progress_deviation.square() / adaptive_width.square())
+  kernel = (visual_prob * progress_prior).clamp_min(eps)
+  teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters, eps=eps)
+  return teacher, adaptive_width
+
+
 @lru_cache(maxsize=32)
 def _cached_progress_transition_cost(
     num_timestamps,
@@ -2247,14 +2290,11 @@ def compute_soft_alignment_direction_details(
   pred_prob = pred_log_prob.exp()
 
   cost = 1.0 - similarity
+  adaptive_width = None
   if teacher is None:
-    temporal_prior = make_temporal_prior_cost(
-        source.shape[1], source.device, source.dtype)
-    teacher_cost = (
-        teacher_feature_weight * cost + rho * temporal_prior[None])
     with torch.no_grad():
-      kernel = torch.exp(-teacher_cost / epsilon).clamp_min(1e-8)
-      teacher = sinkhorn_rows_cols(kernel, sinkhorn_iters)
+      teacher, adaptive_width = make_uncertainty_adaptive_teacher(
+          pred_prob, sinkhorn_iters)
   else:
     if teacher.shape != pred_log_prob.shape:
       raise ValueError(
@@ -2294,6 +2334,13 @@ def compute_soft_alignment_direction_details(
       "pre_norm_mean": 0.5 * (
           source_norm.mean() + target_norm.mean()),
   }
+  if adaptive_width is not None:
+    teacher_entropy = -(
+        teacher * teacher.clamp_min(1e-8).log()).sum(dim=2).mean()
+    metrics.update({
+        "adaptive_teacher_width": adaptive_width.mean(),
+        "adaptive_teacher_entropy": teacher_entropy,
+    })
   return loss, metrics, teacher.detach(), loss_per_pair
 
 

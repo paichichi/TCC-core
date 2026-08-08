@@ -1,0 +1,73 @@
+# D4R Kinetics counterpart of the completed ViT single main experiment.
+# Only the initial D4R checkpoint and run name differ from the ImageNet run.
+
+data_root: /home/paichichi/data/RH20T/TCC_RH20T
+training_index: /home/paichichi/data/RH20T/TCC_RH20T/training_index.pt
+pretrain_path: /home/paichichi/data/pretrain/D4R_KN_1M.pth
+output_root: /home/paichichi/projects/TCC-core/wsl_result/tcc_core_runs
+
+run_name: linux_method3_vit_ln_d4r_kinetics_single_adaptive_tq_8ts1v_b8_seed1_i40000
+
+backbone: vit_b16
+train_backbone_adapters: false
+train_backbone_norm_affine: true
+adapter_domain: all
+
+fusion_mode: attention_pool
+view_mode: single
+representation_mode: legacy_projected
+view_token_dropout: 0.15
+view_token_noise_std: 0.01
+attention_dropout: 0.1
+projector_dropout: 0.1
+pixel_aug: true
+view_mask_mode: none
+view_mask_prob: 0.0
+view_mask_min_views: 1
+prefetch_batches: 0
+pin_memory: true
+aux_teacher_stop_grad: false
+aux_global_negatives: false
+
+batch_episode_pairs: 8
+num_timestamps: 8
+num_multi_view: 1
+camera_matched_pairing: true
+
+gamma: 0.1
+temperature: 0.1
+mv_temperature: 0.1
+lambda_sa: 1.0
+lambda_mv: 0.5
+mv_soft_temporal: true
+mv_soft_temporal_alpha: 0.2
+mv_soft_temporal_tau: 1.0
+softdtw_mode: soft_alignment
+soft_alignment_temperature: 0.1
+soft_alignment_feature_mode: raw
+soft_alignment_normalize_epsilon: 1.0e-12
+# Compatibility-only fields: the adaptive-teacher script does not use these
+# values when constructing T.
+soft_alignment_epsilon: 0.05
+soft_alignment_rho: 0.5
+soft_alignment_teacher_feature_weight: 1.0
+soft_alignment_sinkhorn_iters: 20
+soft_alignment_struct_lambda: 0.1
+# Compatibility only: adaptive Q infers its jump distribution from T and does
+# not impose a fixed maximum forward step.
+soft_alignment_max_forward_step: 1.0
+softdtw_divergence: true
+
+lambda_control_gain: 0.0
+control_gain_margin: 0.02
+lambda_spatial_preserve: 0.0
+spatial_preserve_tolerance: 0.2
+
+lr: 0.000075
+weight_decay: 0.0
+grad_clip_norm: 0.0
+amp_dtype: float16
+seed: 1
+max_iters: 40000
+log_every: 50
+save_every: 5000

@@ -22,8 +22,9 @@ from xirl.models import (  # pylint: disable=wrong-import-position
 
 
 TRANSFER_FORMAT = "tcc_rvt_resnet_v1"
-METHOD3_FORMAT = "asymmetric_domains_v2"
-METHOD3_OBJECTIVES_V1 = "counterfactual_spatial_v1"
+METHOD3_ASYMMETRIC_FORMAT = "asymmetric_domains_v2"
+METHOD3_FOUR_BRANCH_FORMAT = "shared_adapter_four_branch_v1"
+METHOD3_FOUR_BRANCH_OBJECTIVES = "frozen_teacher_control_v2"
 
 
 def file_sha256(path: Path) -> str:
@@ -110,10 +111,28 @@ def validate_source_format(
         f"expected {R3M_LATE_ADAPTER_LAYOUT!r}, got {layout!r}.")
   if require_method3_v2:
     required = {
-        "adapter_domain": "robot_only",
         "representation_mode": "backbone_pooled",
         "r3m_adapter_init": R3M_ADAPTER_INIT_TRAINABLE,
     }
+    method3_format = model_format.get("method3_format")
+    if method3_format == METHOD3_ASYMMETRIC_FORMAT:
+      required.update({
+          "method3_format": METHOD3_ASYMMETRIC_FORMAT,
+          "adapter_domain": "robot_only",
+      })
+    elif method3_format == METHOD3_FOUR_BRANCH_FORMAT:
+      required.update({
+          "method3_format": METHOD3_FOUR_BRANCH_FORMAT,
+          "adapter_domain": "all_shared_control",
+          "method3_objectives": METHOD3_FOUR_BRANCH_OBJECTIVES,
+          "control_gain": "frozen_reference_teacher_hinge",
+          "spatial_preservation":
+              "same_robot_feature_map_relative_residual_hinge",
+      })
+    else:
+      raise ValueError(
+          "Checkpoint has an unsupported Method 3 format: "
+          f"{method3_format!r}.")
     mismatches = {
         key: (expected, model_format.get(key))
         for key, expected in required.items()
@@ -121,31 +140,7 @@ def validate_source_format(
     }
     if mismatches:
       raise ValueError(
-          f"Checkpoint is not a compatible Method 3 ResNet: {mismatches}")
-    if model_format.get("method3_format") != METHOD3_FORMAT:
-      raise ValueError(
-          f"Unsupported Method 3 format: "
-          f"expected {METHOD3_FORMAT!r}, "
-          f"got {model_format.get('method3_format')!r}.")
-    objective_format = model_format.get("method3_objectives")
-    if objective_format is not None:
-      if objective_format != METHOD3_OBJECTIVES_V1:
-        raise ValueError(
-            f"Unsupported Method 3 objectives: {objective_format!r}.")
-      required_objectives = {
-          "control_gain": "shared_teacher_hinge",
-          "spatial_preservation":
-              "same_robot_feature_map_relative_residual_hinge",
-      }
-      objective_mismatches = {
-          key: (expected, model_format.get(key))
-          for key, expected in required_objectives.items()
-          if model_format.get(key) != expected
-      }
-      if objective_mismatches:
-        raise ValueError(
-            "Method 3 objective metadata is incomplete: "
-            f"{objective_mismatches}")
+          f"Checkpoint has incompatible Method 3 metadata: {mismatches}")
   return model_format
 
 
