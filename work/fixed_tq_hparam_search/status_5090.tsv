@@ -4329,3 +4329,54 @@
 2026-08-09T02:13:55+12:00	hpsA_r3m_bn_bi_rho0p25_eps0p1_lr1e4_i40000	r3m_bn_bi	UPSTREAM_SEGMENT_COMPLETE_40000
 2026-08-09T02:13:55+12:00	hpsA_r3m_bn_bi_rho0p25_eps0p1_lr1e4_i40000	r3m_bn_bi	UPSTREAM_COMPLETE
 2026-08-09T02:13:58+12:00	hpsA_r3m_bn_bi_rho0p25_eps0p1_lr1e4_i40000	r3m_bn_bi	LITE_RUNNING
+2026-08-09T05:03:38+12:00	hpsA_r3m_bn_bi_rho0p25_eps0p1_lr1e4_i40000	r3m_bn_bi	LITE_COMPLETE
+2026-08-09T05:03:38+12:00	WAITING_FOR_IMPORTED_H200_LITE
+2026-08-09T05:18:38+12:00	WAITING_FOR_IMPORTED_H200_LITE
+2026-08-09T05:33:38+12:00	WAITING_FOR_IMPORTED_H200_LITE
+2026-08-09T05:48:38+12:00	WAITING_FOR_IMPORTED_H200_LITE
+2026-08-09T06:03:38+12:00	WAITING_FOR_IMPORTED_H200_LITE
+2026-08-09T06:13:13+12:00	hpsA_h200_vit_imagenet_rho0p5_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T07:02:48+12:00	hpsA_h200_vit_imagenet_rho0p5_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_COMPLETE
+2026-08-09T07:02:48+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_RUNNING_TO_5000
+2026-08-09T08:59:49+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_SEGMENT_COMPLETE_5000
+2026-08-09T08:59:49+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_RUNNING_TO_10000
+2026-08-09T10:56:45+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_SEGMENT_COMPLETE_10000
+2026-08-09T10:56:45+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_RUNNING_TO_15000
+2026-08-09T12:53:17+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_SEGMENT_COMPLETE_15000
+2026-08-09T12:53:17+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_RUNNING_TO_20000
+2026-08-09T14:49:37+12:00	hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	UPSTREAM_SEGMENT_COMPLETE_20000
+2026-08-09T14:49:37+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T14:49:46+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T14:50:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T14:50:59+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:00:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:00:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:10:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:10:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:20:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:20:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:30:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:30:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:40:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:40:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T15:50:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T15:50:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:00:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:00:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:10:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:10:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:20:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:20:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:30:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:30:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:40:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:40:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T16:50:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T16:50:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T17:00:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T17:00:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T17:10:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T17:10:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T17:20:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING
+2026-08-09T17:20:58+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_FAILED_EXIT_1
+2026-08-09T17:30:50+12:00	hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	LITE_RUNNING

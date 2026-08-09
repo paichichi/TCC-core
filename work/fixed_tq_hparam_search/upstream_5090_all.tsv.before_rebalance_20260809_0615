@@ -5,7 +5,3 @@ linux_method3_resnet_bn_affine_symmetric_two_branch_single_8ts1v_b20_seed1_i4000
 hpsA_r3m_bn_bi_rho0p25_eps0p05_lr1e4_i40000	r3m_bn_bi	0.25	0.05	0.0001	1	0.1	1	0.5
 hpsA_r3m_bn_bi_rho0p25_eps0p025_lr1e4_i40000	r3m_bn_bi	0.25	0.025	0.0001	1	0.1	1	0.5
 hpsA_r3m_bn_bi_rho0p25_eps0p1_lr1e4_i40000	r3m_bn_bi	0.25	0.1	0.0001	1	0.1	1	0.5
-hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	0.5	0.05	0.0001	1	0.1	1	0.5
-hpsA_h200_r3m_bn_bi_rho1p0_eps0p05_lr1e4_i40000	r3m_bn_bi	1.0	0.05	0.0001	1	0.1	1	0.5
-hpsA_h200_r3m_bn_bi_rho0p5_eps0p025_lr1e4_i40000	r3m_bn_bi	0.5	0.025	0.0001	1	0.1	1	0.5
-hpsA_h200_r3m_bn_bi_rho0p5_eps0p1_lr1e4_i40000	r3m_bn_bi	0.5	0.1	0.0001	1	0.1	1	0.5
