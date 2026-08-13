@@ -9,9 +9,5 @@ hpsA_h200_r3m_bn_bi_rho0p5_eps0p05_lr1e4_i40000	r3m_bn_bi	0.5	0.05	0.0001	1	0.1	
 hpsA_h200_r3m_bn_bi_rho1p0_eps0p05_lr1e4_i40000	r3m_bn_bi	1.0	0.05	0.0001	1	0.1	1	0.5
 hpsA_h200_r3m_bn_bi_rho0p5_eps0p025_lr1e4_i40000	r3m_bn_bi	0.5	0.025	0.0001	1	0.1	1	0.5
 hpsA_h200_r3m_bn_bi_rho0p5_eps0p1_lr1e4_i40000	r3m_bn_bi	0.5	0.1	0.0001	1	0.1	1	0.5
+hpsA_h200_r3m_bn_bi_rho1p0_eps0p025_lr1e4_i40000	r3m_bn_bi	1.0	0.025	0.0001	1	0.1	1	0.5
 hpsA_h200_r3m_bn_bi_rho1p0_eps0p1_lr1e4_i40000	r3m_bn_bi	1.0	0.1	0.0001	1	0.1	1	0.5
-hpsA2_vit_imagenet_b20_rho0p5_eps0p05_lr3p75em5_i40000	vit_imagenet	0.5	0.05	0.0000375	1	0.1	1	0.5
-hpsA2_vit_imagenet_b20_rho0p5_eps0p05_lr7p5em5_i40000	vit_imagenet	0.5	0.05	0.000075	1	0.1	1	0.5
-hpsA2_vit_imagenet_b20_rho0p5_eps0p05_lr1p5em4_i40000	vit_imagenet	0.5	0.05	0.00015	1	0.1	1	0.5
-hpsA2_r3m_bn_b20_rho0p25_eps0p025_lr5em5_i40000	r3m_bn_bi	0.25	0.025	0.00005	1	0.1	1	0.5
-hpsA2_r3m_bn_b20_rho0p25_eps0p025_lr2em4_i40000	r3m_bn_bi	0.25	0.025	0.0002	1	0.1	1	0.5

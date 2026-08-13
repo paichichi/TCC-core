@@ -60,18 +60,6 @@ class Group:
 
 
 @dataclass
-class CleanAugBatchPlan:
-  clean_views: list[ViewRef]
-  clean_group_indices: list[int]
-  clean_camera_ids: list[int]
-  aug_views: list[ViewRef]
-  aug_seeds: list[int]
-  aug_group_indices: list[int]
-  aug_camera_ids: list[int]
-  num_groups: int
-
-
-@dataclass
 class DomainAwareEncoding:
   """Backbone outputs needed by asymmetric Method 3 training."""
 
@@ -1259,8 +1247,9 @@ def validate_method_configuration(args: argparse.Namespace) -> None:
           "single view mode requires --pixel-aug for within-domain CL.")
     if args.view_mask_mode != "none":
       raise ValueError("single view mode cannot use view masking.")
-    if args.prefetch_batches not in (0, 1):
-      raise ValueError("single view mode supports --prefetch-batches=0 or 1.")
+    if args.prefetch_batches:
+      raise ValueError(
+          "single view mode currently requires --prefetch-batches=0.")
   elif args.view_mode == "multi":
     if args.num_multi_view < 2:
       raise ValueError("multi view mode requires at least two views.")
@@ -1849,29 +1838,16 @@ def load_image(
 ) -> torch.Tensor:
   with Image.open(root / rel_path) as image:
     rgb = image.convert("RGB")
-    return transform_rgb(rgb, transform, transform_seed)
-
-
-def load_rgb_image(root: Path, rel_path: str) -> Image.Image:
-  with Image.open(root / rel_path) as image:
-    return image.convert("RGB")
-
-
-def transform_rgb(
-    rgb: Image.Image,
-    transform,
-    transform_seed: int | None = None,
-) -> torch.Tensor:
-  if transform_seed is None:
-    return transform(rgb)
-  python_random_state = random.getstate()
-  try:
-    random.seed(transform_seed)
-    with torch.random.fork_rng(devices=[]):
-      torch.manual_seed(transform_seed)
+    if transform_seed is None:
       return transform(rgb)
-  finally:
-    random.setstate(python_random_state)
+    python_random_state = random.getstate()
+    try:
+      random.seed(transform_seed)
+      with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(transform_seed)
+        return transform(rgb)
+    finally:
+      random.setstate(python_random_state)
 
 
 def move_batch_tensor(
@@ -1985,13 +1961,26 @@ def sample_masked_views(
   return selected
 
 
-def plan_clean_aug_batch(
+def prepare_clean_aug_batch_images(
+    root: Path,
     sequences: list[list[Group]],
+    clean_transform,
+    aug_transform,
+    device,
     view_mask_mode: str,
     view_mask_prob: float,
     view_mask_min_views: int,
     rng: random.Random,
-) -> CleanAugBatchPlan:
+    pin_memory: bool = False,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    int,
+]:
   clean_views = []
   clean_group_indices = []
   clean_camera_ids = []
@@ -2022,37 +2011,8 @@ def plan_clean_aug_batch(
         aug_group_indices.append(group_idx)
         aug_camera_ids.append(view.camera_id)
       group_idx += 1
-  return CleanAugBatchPlan(
-      clean_views=clean_views,
-      clean_group_indices=clean_group_indices,
-      clean_camera_ids=clean_camera_ids,
-      aug_views=aug_views,
-      aug_seeds=aug_seeds,
-      aug_group_indices=aug_group_indices,
-      aug_camera_ids=aug_camera_ids,
-      num_groups=group_idx,
-  )
-
-
-def materialize_clean_aug_batch(
-    root: Path,
-    plan: CleanAugBatchPlan,
-    clean_transform,
-    aug_transform,
-    device,
-    pin_memory: bool = False,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    int,
-]:
   clean_images = [
-      load_image(root, view.rel_path, clean_transform)
-      for view in plan.clean_views
+      load_image(root, view.rel_path, clean_transform) for view in clean_views
   ]
   aug_images = [
       load_image(
@@ -2061,73 +2021,16 @@ def materialize_clean_aug_batch(
           aug_transform,
           transform_seed=aug_seed,
       )
-      for view, aug_seed in zip(plan.aug_views, plan.aug_seeds)
+      for view, aug_seed in zip(aug_views, aug_seeds)
   ]
   return (
       move_batch_tensor(torch.stack(clean_images, dim=0), device, pin_memory),
-      torch.tensor(plan.clean_group_indices, dtype=torch.long, device=device),
-      torch.tensor(plan.clean_camera_ids, dtype=torch.long, device=device),
+      torch.tensor(clean_group_indices, dtype=torch.long, device=device),
+      torch.tensor(clean_camera_ids, dtype=torch.long, device=device),
       move_batch_tensor(torch.stack(aug_images, dim=0), device, pin_memory),
-      torch.tensor(plan.aug_group_indices, dtype=torch.long, device=device),
-      torch.tensor(plan.aug_camera_ids, dtype=torch.long, device=device),
-      plan.num_groups,
-  )
-
-
-def prefetch_clean_aug_sources(
-    root: Path,
-    plan: CleanAugBatchPlan,
-    clean_transform,
-    pin_memory: bool = False,
-):
-  clean_images = [
-      load_image(root, view.rel_path, clean_transform)
-      for view in plan.clean_views
-  ]
-  aug_rgb_images = [
-      load_rgb_image(root, view.rel_path) for view in plan.aug_views
-  ]
-  clean_batch = torch.stack(clean_images, dim=0)
-  if pin_memory:
-    clean_batch = clean_batch.pin_memory()
-  return (
-      clean_batch,
-      torch.tensor(plan.clean_group_indices, dtype=torch.long),
-      torch.tensor(plan.clean_camera_ids, dtype=torch.long),
-      aug_rgb_images,
-      plan.aug_seeds,
-      torch.tensor(plan.aug_group_indices, dtype=torch.long),
-      torch.tensor(plan.aug_camera_ids, dtype=torch.long),
-      plan.num_groups,
-  )
-
-
-def prepare_clean_aug_batch_images(
-    root: Path,
-    sequences: list[list[Group]],
-    clean_transform,
-    aug_transform,
-    device,
-    view_mask_mode: str,
-    view_mask_prob: float,
-    view_mask_min_views: int,
-    rng: random.Random,
-    pin_memory: bool = False,
-):
-  plan = plan_clean_aug_batch(
-      sequences,
-      view_mask_mode,
-      view_mask_prob,
-      view_mask_min_views,
-      rng,
-  )
-  return materialize_clean_aug_batch(
-      root,
-      plan,
-      clean_transform,
-      aug_transform,
-      device,
-      pin_memory,
+      torch.tensor(aug_group_indices, dtype=torch.long, device=device),
+      torch.tensor(aug_camera_ids, dtype=torch.long, device=device),
+      group_idx,
   )
 
 
@@ -3366,9 +3269,11 @@ def main() -> None:
       args.lambda_control_gain > 0
       or args.lambda_spatial_preserve > 0
   )
-  if use_prefetch and args.fusion_mode != "attention_pool":
+  if use_prefetch and (
+      args.fusion_mode != "attention_pool" or args.pixel_aug
+  ):
     raise ValueError(
-        "Batch prefetch currently requires attention_pool.")
+        "Batch prefetch currently requires attention_pool with pixel_aug=false.")
 
   def sample_sequences() -> list[list[Group]]:
     return sample_paired_sequences(
@@ -3384,54 +3289,19 @@ def main() -> None:
 
   prefetch_executor = None
   prefetch_future = None
-  prefetch_rng_state_after_plan = None
-
-  def submit_prefetch(rng_state):
-    local_rng = random.Random()
-    local_rng.setstate(rng_state)
-    sequences = sample_paired_sequences(
-        paired_tracks,
-        episode_ids,
-        task_to_episodes,
-        args.batch_episode_pairs,
-        args.num_timestamps,
-        args.num_multi_view,
-        args.camera_matched_pairing,
-        local_rng,
-    )
-    if args.pixel_aug:
-      plan = plan_clean_aug_batch(
-          sequences,
-          args.view_mask_mode,
-          args.view_mask_prob,
-          args.view_mask_min_views,
-          local_rng,
-      )
-      future = prefetch_executor.submit(
-          prefetch_clean_aug_sources,
-          args.data_root,
-          plan,
-          transform,
-          args.pin_memory,
-      )
-    else:
-      future = prefetch_executor.submit(
-          prepare_batch_images,
-          args.data_root,
-          sequences,
-          transform,
-          torch.device("cpu"),
-          args.pin_memory,
-      )
-    return future, local_rng.getstate()
-
   if use_prefetch:
     prefetch_executor = ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="batch-prefetch",
     )
-    prefetch_future, prefetch_rng_state_after_plan = submit_prefetch(
-        rng.getstate())
+    prefetch_future = prefetch_executor.submit(
+        prepare_batch_images,
+        args.data_root,
+        sample_sequences(),
+        transform,
+        torch.device("cpu"),
+        args.pin_memory,
+    )
 
   csv_name = "losses.csv" if is_main else f"losses_rank{rank}.csv"
   csv_path = args.out_dir / csv_name
@@ -3516,42 +3386,21 @@ def main() -> None:
       if use_prefetch:
         if prefetch_future is None:
           raise RuntimeError("Missing prefetched image batch.")
-        if prefetch_rng_state_after_plan is None:
-          raise RuntimeError("Missing prefetched RNG state.")
-        prefetched = prefetch_future.result()
-        rng.setstate(prefetch_rng_state_after_plan)
-        if args.pixel_aug:
-          (
-              images,
-              group_idx,
-              camera_ids,
-              aug_rgb_images,
-              aug_seeds,
-              aug_group_idx,
-              aug_camera_ids,
-              num_groups,
-          ) = prefetched
-          aug_images = torch.stack([
-              transform_rgb(rgb, aug_transform, aug_seed)
-              for rgb, aug_seed in zip(aug_rgb_images, aug_seeds)
-          ], dim=0)
-          aug_images = move_batch_tensor(
-              aug_images, device, args.pin_memory)
-          aug_group_idx = aug_group_idx.to(
-              device, non_blocking=args.pin_memory)
-          aug_camera_ids = aug_camera_ids.to(
-              device, non_blocking=args.pin_memory)
-        else:
-          images, group_idx, camera_ids, num_groups = prefetched
-          aug_images = None
-          aug_group_idx = None
-          aug_camera_ids = None
+        images, group_idx, camera_ids, num_groups = prefetch_future.result()
         if step < args.max_iters:
-          prefetch_future, prefetch_rng_state_after_plan = submit_prefetch(
-              rng.getstate())
+          prefetch_future = prefetch_executor.submit(
+              prepare_batch_images,
+              args.data_root,
+              sample_sequences(),
+              transform,
+              torch.device("cpu"),
+              args.pin_memory,
+          )
         images = move_batch_tensor(images, device, args.pin_memory)
         group_idx = group_idx.to(device, non_blocking=args.pin_memory)
-        camera_ids = camera_ids.to(device, non_blocking=args.pin_memory)
+        aug_images = None
+        aug_group_idx = None
+        aug_camera_ids = None
       else:
         all_sequences = sample_sequences()
 

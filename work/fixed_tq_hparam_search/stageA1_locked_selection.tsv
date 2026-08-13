@@ -1,0 +1,3 @@
+backbone	rho	epsilon	lr	max_forward_step	lambda_q	lambda_sa	lambda_mv	selected_run_name	selection_rule	sampling_note
+vit_imagenet	0.5	0.05	0.000075	1	0.1	1	0.5	linux_method3_vit_ln_single_8ts1v_b8_seed1_i40000	user_locked_default_priority	A1 used b8; A2 reruns all ViT LR points at b20
+r3m_bn_bi	0.25	0.025	0.0001	1	0.1	1	0.5	hpsA_r3m_bn_bi_rho0p25_eps0p025_lr1e4_i40000	user_locked_raw_best	A1 and A2 use b20

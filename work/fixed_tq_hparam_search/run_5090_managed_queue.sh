@@ -22,7 +22,7 @@ mkdir -p "$STATE_DIR" "$LITE_ROOT"
 config_for() {
     case "$1" in
         vit_imagenet)
-            echo "$ROOT/configs/linux_method3_vit_ln_single_8ts1v_b8_seed1_i40000.yaml"
+            echo "$ROOT/configs/linux_method3_vit_ln_single_8ts1v_b20_seed1_i40000.yaml"
             ;;
         r3m_bn_bi)
             echo "$ROOT/configs/linux_method3_resnet_bn_affine_symmetric_two_branch_single_8ts1v_b20_seed1_i40000.yaml"

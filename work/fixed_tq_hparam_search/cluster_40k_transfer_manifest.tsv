@@ -1,0 +1,6 @@
+run_name	backbone	rho	epsilon	lr	max_forward_step	lambda_q	lambda_sa	lambda_infonce	source_host	source_gpu	checkpoint_sha256	transfer_status
+hpsA_h200_vit_imagenet_rho0p5_eps0p05_lr7p5e5_i40000	vit_imagenet	0.5	0.05	0.000075	1	0.1	1	0.5	prd03	H200	a9b1304e661bf3a763cf1dab7b7afe6af4b3f51599a8ff7ce3a582e5083be8b3	already_present_verified
+hpsA_h200_vit_imagenet_rho1p0_eps0p05_lr7p5e5_i40000	vit_imagenet	1.0	0.05	0.000075	1	0.1	1	0.5	prd03	H200	b5821b8f16a53f86b9d3585335f323065b3b0c4df1ab4f9d5331a32058401719	already_present_verified
+hpsA_h200_vit_imagenet_rho0p5_eps0p025_lr7p5e5_i40000	vit_imagenet	0.5	0.025	0.000075	1	0.1	1	0.5	prd03	H200	c60877fd0d235c07c2be18dfae267d6c4706a3c4feac638df6153fee827a4d96	transferred_verified
+hpsA_h200_vit_imagenet_rho0p5_eps0p1_lr7p5e5_i40000	vit_imagenet	0.5	0.1	0.000075	1	0.1	1	0.5	prd03	H200	e1b61751e7916b52eb5e9d80c639c6e3d834ec7eebd69d6b9a7c6a95ce3027cc	transferred_verified
+hpsA_h200_vit_imagenet_rho0p25_eps0p025_lr7p5e5_i40000	vit_imagenet	0.25	0.025	0.000075	1	0.1	1	0.5	prd03	H200	2217f47ae99718bd8743e052c2836d43d89a5f2813fecf455e4c7cdc148841fb	transferred_verified
