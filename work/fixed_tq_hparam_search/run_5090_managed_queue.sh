@@ -11,6 +11,7 @@ OUTPUT_ROOT="$ROOT/wsl_result/tcc_core_runs"
 STATE_DIR="$OUTPUT_ROOT/launchers/managed_hparam_search"
 LITE_ROOT="$ROOT/wsl_result/downstream_rvt2_lite_runs/hparam_search"
 STATUS="$SEARCH_DIR/status_5090.tsv"
+SKIP_UPSTREAM="$SEARCH_DIR/skip_upstream_5090.txt"
 
 GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader -i 0)"
 if [[ "$GPU_NAME" != *"RTX 5090"* ]]; then
@@ -35,6 +36,11 @@ config_for() {
 
 lite_family_for() {
     [[ "$1" == "vit_imagenet" ]] && echo vit || echo r3m_bn
+}
+
+skip_upstream_run() {
+    local run_name="$1"
+    [[ -f "$SKIP_UPSTREAM" ]] && grep -Fxq "$run_name" "$SKIP_UPSTREAM"
 }
 
 run_pending_lite() {
@@ -94,6 +100,9 @@ while true; do
     pending_found=0
     while IFS=$'\t' read -r run_name backbone rho epsilon lr max_forward_step lambda_q lambda_sa lambda_mv; do
         [[ "$run_name" == "run_name" || -z "$run_name" ]] && continue
+        if skip_upstream_run "$run_name"; then
+            continue
+        fi
         run_dir="$OUTPUT_ROOT/$run_name"
         [[ -f "$run_dir/checkpoint_040000.pt" ]] && continue
         pending_found=1
